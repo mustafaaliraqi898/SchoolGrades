@@ -1,0 +1,1341 @@
+import {
+  AcademicYear,
+  SchoolClass,
+  Section,
+  Subject,
+  Student,
+  GradeRecord,
+  AppSettings,
+  GradeStage,
+  ExemptionSettings,
+  UserAccount,
+} from '../types';
+import { recalculateGradeRecord } from './calculations';
+import {
+  completeDemoSeedData,
+  CANONICAL_SUBJECTS,
+  ADDITIONAL_DEMO_STUDENTS,
+} from './seedData';
+
+const STORAGE_KEY = 'school_grades_offline_db_v1';
+
+export const INITIAL_DEFAULT_ADMIN: UserAccount = {
+  id: 'usr-admin-default',
+  username: 'admin',
+  passwordHash: '4cb3c70fb1df82313360bf6ef219389c7ccea0bd5061e8a5a39bd8d2085c1cc4',
+  salt: 'school_admin_salt_seed_2026',
+  role: 'admin',
+  isActive: true,
+  mustChangePassword: true,
+  createdAt: '2026-09-01T08:00:00.000Z',
+};
+
+export interface DatabaseState {
+  academicYears: AcademicYear[];
+  classes: SchoolClass[];
+  sections: Section[];
+  subjects: Subject[];
+  students: Student[];
+  grades: Record<string, GradeRecord>; // key: `${academicYearId}_${classId}_${sectionId}_${subjectId}_${studentId}`
+  settings: AppSettings;
+  exemptionSettings?: Record<string, ExemptionSettings>; // key: academicYearId
+  users?: UserAccount[];
+  version: string;
+  lastBackupDate?: string;
+}
+
+// Initial realistic default data for an Arabic/Iraqi secondary school
+const INITIAL_YEARS: AcademicYear[] = [
+  { id: 'ay-2026-2027', name: '2026–2027', isCurrent: true },
+  { id: 'ay-2025-2026', name: '2025–2026', isCurrent: false },
+];
+
+const INITIAL_CLASSES: SchoolClass[] = [
+  { id: 'cls-5-sci', name: 'الخامس العلمي', stage: 'إعدادي', order: 1 },
+  { id: 'cls-6-sci', name: 'السادس العلمي', stage: 'إعدادي', order: 2 },
+  { id: 'cls-4-sci', name: 'الرابع العلمي', stage: 'إعدادي', order: 3 },
+  { id: 'cls-3-mid', name: 'الثالث المتوسط', stage: 'متوسط', order: 4 },
+];
+
+const INITIAL_SECTIONS: Section[] = [
+  { id: 'sec-5sci-a', classId: 'cls-5-sci', name: 'أ' },
+  { id: 'sec-5sci-b', classId: 'cls-5-sci', name: 'ب' },
+  { id: 'sec-6sci-a', classId: 'cls-6-sci', name: 'أ' },
+  { id: 'sec-6sci-b', classId: 'cls-6-sci', name: 'ب' },
+  { id: 'sec-4sci-a', classId: 'cls-4-sci', name: 'أ' },
+  { id: 'sec-3mid-a', classId: 'cls-3-mid', name: 'أ' },
+];
+
+const INITIAL_SUBJECTS: Subject[] = [
+  { id: 'sub-math', classId: 'cls-5-sci', name: 'الرياضيات', maxScore: 100, passScore: 50, order: 1 },
+  { id: 'sub-arabic', classId: 'cls-5-sci', name: 'اللغة العربية', maxScore: 100, passScore: 50, order: 2 },
+  { id: 'sub-english', classId: 'cls-5-sci', name: 'اللغة الإنكليزية', maxScore: 100, passScore: 50, order: 3 },
+  { id: 'sub-physics', classId: 'cls-5-sci', name: 'الفيزياء', maxScore: 100, passScore: 50, order: 4 },
+  { id: 'sub-chemistry', classId: 'cls-5-sci', name: 'الكيمياء', maxScore: 100, passScore: 50, order: 5 },
+  { id: 'sub-biology', classId: 'cls-5-sci', name: 'الأحياء', maxScore: 100, passScore: 50, order: 6 },
+  { id: 'sub-islamic', classId: 'cls-5-sci', name: 'التربية الإسلامية', maxScore: 100, passScore: 50, order: 7 },
+
+  // For 6th Science
+  { id: 'sub-6-math', classId: 'cls-6-sci', name: 'الرياضيات', maxScore: 100, passScore: 50, order: 1 },
+  { id: 'sub-6-arabic', classId: 'cls-6-sci', name: 'اللغة العربية', maxScore: 100, passScore: 50, order: 2 },
+  { id: 'sub-6-english', classId: 'cls-6-sci', name: 'اللغة الإنكليزية', maxScore: 100, passScore: 50, order: 3 },
+  { id: 'sub-6-physics', classId: 'cls-6-sci', name: 'الفيزياء', maxScore: 100, passScore: 50, order: 4 },
+  { id: 'sub-6-chem', classId: 'cls-6-sci', name: 'الكيمياء', maxScore: 100, passScore: 50, order: 5 },
+  { id: 'sub-6-bio', classId: 'cls-6-sci', name: 'الأحياء', maxScore: 100, passScore: 50, order: 6 },
+];
+
+const INITIAL_STUDENTS_5SCI_A: Student[] = [
+  { id: 'stu-101', registrationNumber: '1001', fatherPhone: '07701234501', seatNumber: 1, nationalId: '109823441', name: 'أحمد محمد علي التميمي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-102', registrationNumber: '1002', fatherPhone: '07701234502', seatNumber: 2, nationalId: '109823442', name: 'باقر حيدر شاكر الحسني', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-103', registrationNumber: '1003', fatherPhone: '07701234503', seatNumber: 3, nationalId: '109823443', name: 'جعفر جاسم حميد الكعبي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-104', registrationNumber: '1004', fatherPhone: '07701234504', seatNumber: 4, nationalId: '109823444', name: 'حسين علي عبد الزهرة الخفاجي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-105', registrationNumber: '1005', fatherPhone: '07701234505', seatNumber: 5, nationalId: '109823445', name: 'حمزة كاظم جواد العبيدي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-106', registrationNumber: '1006', fatherPhone: '07701234506', seatNumber: 6, nationalId: '109823446', name: 'ذو الفقار صلاح مهدي الزاملي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-107', registrationNumber: '1007', fatherPhone: '07701234507', seatNumber: 7, nationalId: '109823447', name: 'رضا مهند نوري الربيعي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-108', registrationNumber: '1008', fatherPhone: '07701234508', seatNumber: 8, nationalId: '109823448', name: 'زيد فراس عبد الكريم الدليمي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-109', registrationNumber: '1009', fatherPhone: '07701234509', seatNumber: 9, nationalId: '109823449', name: 'سجاد قاسم هاشم الشمري', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-110', registrationNumber: '1010', fatherPhone: '07701234510', seatNumber: 10, nationalId: '109823450', name: 'سيف الدين ماجد صبري الموسوي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-111', registrationNumber: '1011', fatherPhone: '07701234511', seatNumber: 11, nationalId: '109823451', name: 'صادق جعفر عطية العامري', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-112', registrationNumber: '1012', fatherPhone: '07701234512', seatNumber: 12, nationalId: '109823452', name: 'ضياء عمار عبد الحسين المالكي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-113', registrationNumber: '1013', fatherPhone: '07701234513', seatNumber: 13, nationalId: '109823453', name: 'طه ياسين عبد الله السعدي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-114', registrationNumber: '1014', fatherPhone: '07701234514', seatNumber: 14, nationalId: '109823454', name: 'عباس فاضل راضي الجبوري', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-115', registrationNumber: '1015', fatherPhone: '07701234515', seatNumber: 15, nationalId: '109823455', name: 'عبد الله رائد كمال البياتي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-116', registrationNumber: '1016', fatherPhone: '07701234516', seatNumber: 16, nationalId: '109823456', name: 'علي رضا عبد الأمير اللامي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-117', registrationNumber: '1017', fatherPhone: '07701234517', seatNumber: 17, nationalId: '109823457', name: 'عمر عثمان فاروق الحديثي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-118', registrationNumber: '1018', fatherPhone: '07701234518', seatNumber: 18, nationalId: '109823458', name: 'كرار وسام نجم الساعدي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-119', registrationNumber: '1019', fatherPhone: '07701234519', seatNumber: 19, nationalId: '109823459', name: 'محمد باقر إحسان الحسيني', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-120', registrationNumber: '1020', fatherPhone: '07701234520', seatNumber: 20, nationalId: '109823460', name: 'مصطفى علاء خضير العاني', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-121', registrationNumber: '1021', fatherPhone: '07701234521', seatNumber: 21, nationalId: '109823461', name: 'مهدي ناصر سعيد الغراوي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-122', registrationNumber: '1022', fatherPhone: '07701234522', seatNumber: 22, nationalId: '109823462', name: 'مؤمل ثائر سلمان البديري', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-123', registrationNumber: '1023', fatherPhone: '07701234523', seatNumber: 23, nationalId: '109823463', name: 'يحيى مروان حامد المشهداني', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+  { id: 'stu-124', registrationNumber: '1024', fatherPhone: '07701234524', seatNumber: 24, nationalId: '109823464', name: 'يوسف دريد منذر القيسي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-a', gender: 'male' },
+];
+
+const INITIAL_SETTINGS: AppSettings = {
+  schoolName: 'ثانوية المتميزين النموذجية للبنين',
+  directorName: 'أ. د. علي حسين الموسوي',
+  examCommitteeHead: 'أ. مصطفى عبد السلام الكرخي',
+  city: 'بغداد / الكرخ الأولى',
+  roundingRule: 'standard',
+  maxScoreDefault: 100,
+  passScoreDefault: 50,
+  confirmPreviousTermEdits: true,
+  theme: 'dark',
+};
+
+// Generate realistic pre-existing grade records for demonstration & immediate functionality
+function generateInitialGrades(students: Student[], subjects: Subject[], settings: AppSettings): Record<string, GradeRecord> {
+  const grades: Record<string, GradeRecord> = {};
+
+  students.forEach((stu, index) => {
+    // Generate scores for Math (sub-math)
+    const mathKey = `ay-2026-2027_cls-5-sci_sec-5sci-a_sub-math_${stu.id}`;
+    
+    // Some students have full grades, some have up to midterm, some missing to demonstrate indicators
+    let term1: number | null = null;
+    let midterm: number | null = null;
+    let term2: number | null = null;
+    let finalExam: number | null = null;
+
+    if (index < 20) {
+      // term 1 entered
+      term1 = 70 + ((index * 7) % 28);
+    }
+    if (index < 16) {
+      // midterm entered
+      midterm = 65 + ((index * 5) % 32);
+    }
+    if (index < 12) {
+      // term 2 entered
+      term2 = 72 + ((index * 6) % 26);
+    }
+    if (index < 8) {
+      // final exam entered
+      finalExam = 68 + ((index * 4) % 30);
+    }
+
+    const { termYearlyScore, finalScore } = recalculateGradeRecord({
+      term1Score: term1,
+      midtermScore: midterm,
+      term2Score: term2,
+      finalExamScore: finalExam,
+    }, settings.roundingRule);
+
+    grades[mathKey] = {
+      id: mathKey,
+      academicYearId: 'ay-2026-2027',
+      classId: 'cls-5-sci',
+      sectionId: 'sec-5sci-a',
+      subjectId: 'sub-math',
+      studentId: stu.id,
+      term1Score: term1,
+      midtermScore: midterm,
+      term2Score: term2,
+      termYearlyScore,
+      finalExamScore: finalExam,
+      finalScore,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    // Arabic Subject (sub-arabic)
+    const arabicKey = `ay-2026-2027_cls-5-sci_sec-5sci-a_sub-arabic_${stu.id}`;
+    const aTerm1 = index < 22 ? 75 + ((index * 3) % 22) : null;
+    const aMidterm = index < 18 ? 80 + ((index * 4) % 18) : null;
+    const aTerm2 = index < 14 ? 78 + ((index * 5) % 20) : null;
+    const aFinal = index < 9 ? 82 + ((index * 2) % 16) : null;
+    const arabicCalculated = recalculateGradeRecord({
+      term1Score: aTerm1,
+      midtermScore: aMidterm,
+      term2Score: aTerm2,
+      finalExamScore: aFinal,
+    }, settings.roundingRule);
+
+    grades[arabicKey] = {
+      id: arabicKey,
+      academicYearId: 'ay-2026-2027',
+      classId: 'cls-5-sci',
+      sectionId: 'sec-5sci-a',
+      subjectId: 'sub-arabic',
+      studentId: stu.id,
+      term1Score: aTerm1,
+      midtermScore: aMidterm,
+      term2Score: aTerm2,
+      termYearlyScore: arabicCalculated.termYearlyScore,
+      finalExamScore: aFinal,
+      finalScore: arabicCalculated.finalScore,
+      lastUpdated: new Date().toISOString(),
+    };
+  });
+
+  return grades;
+}
+
+export function buildGradeKey(
+  academicYearId: string,
+  classId: string,
+  sectionId: string,
+  subjectId: string,
+  studentId: string
+): string {
+  return `${academicYearId}_${classId}_${sectionId}_${subjectId}_${studentId}`;
+}
+
+export class LocalStorageEngine {
+  private state: DatabaseState;
+  private listeners: Set<() => void> = new Set();
+
+  constructor() {
+    this.state = this.loadFromStorage();
+  }
+
+  private loadFromStorage(): DatabaseState {
+    try {
+      const data = localStorage.getItem(STORAGE_KEY);
+      if (data) {
+        const parsed: DatabaseState = JSON.parse(data);
+        if (parsed.academicYears && parsed.grades) {
+          // Normalize existing students so registrationNumber and fatherPhone are always populated
+          if (Array.isArray(parsed.students)) {
+            parsed.students = parsed.students.map((s, idx) => ({
+              ...s,
+              registrationNumber: s.registrationNumber || String(1001 + idx),
+              fatherPhone: s.fatherPhone || `0770${1000000 + idx}`,
+            }));
+          }
+
+          // Normalize subjects order per class so ordering is strictly preserved and reliable
+          if (Array.isArray(parsed.subjects)) {
+            const subjectsByClass = new Map<string, Subject[]>();
+            parsed.subjects.forEach((sub, idx) => {
+              if (!subjectsByClass.has(sub.classId)) {
+                subjectsByClass.set(sub.classId, []);
+              }
+              subjectsByClass.get(sub.classId)!.push({
+                ...sub,
+                order: typeof sub.order === 'number' && sub.order > 0 ? sub.order : idx + 1,
+              });
+            });
+
+            const normalizedSubjects: Subject[] = [];
+            subjectsByClass.forEach((list) => {
+              list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+              list.forEach((sub, idx) => {
+                sub.order = idx + 1;
+                normalizedSubjects.push(sub);
+              });
+            });
+            parsed.subjects = normalizedSubjects;
+          }
+
+          if (!parsed.exemptionSettings) {
+            parsed.exemptionSettings = {};
+          }
+
+          // Ensure default admin exists if no users are found
+          let stateNeedsPersist = false;
+          if (!parsed.users || !Array.isArray(parsed.users) || parsed.users.length === 0) {
+            parsed.users = [INITIAL_DEFAULT_ADMIN];
+            stateNeedsPersist = true;
+          }
+
+          // Idempotently complete any missing demo subjects, students, or grade records
+          const { newSubjectsCount, newStudentsCount, newGradesCount } = completeDemoSeedData(parsed);
+          if (newSubjectsCount > 0 || newStudentsCount > 0 || newGradesCount > 0 || stateNeedsPersist) {
+            this.persistToDisk(parsed);
+          }
+
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load database from localStorage, initializing fresh', e);
+    }
+
+    const defaultState: DatabaseState = {
+      academicYears: INITIAL_YEARS,
+      classes: INITIAL_CLASSES,
+      sections: INITIAL_SECTIONS,
+      subjects: [...CANONICAL_SUBJECTS],
+      students: [...INITIAL_STUDENTS_5SCI_A, ...ADDITIONAL_DEMO_STUDENTS],
+      grades: {},
+      settings: INITIAL_SETTINGS,
+      exemptionSettings: {},
+      users: [INITIAL_DEFAULT_ADMIN],
+      version: '1.0.0',
+      lastBackupDate: new Date().toISOString(),
+    };
+
+    // Populate all grades completely and realistically
+    completeDemoSeedData(defaultState);
+
+    this.persistToDisk(defaultState);
+    return defaultState;
+  }
+
+  public completeSeedData(): { newSubjectsCount: number; newStudentsCount: number; newGradesCount: number } {
+    const res = completeDemoSeedData(this.state);
+    if (res.newSubjectsCount > 0 || res.newStudentsCount > 0 || res.newGradesCount > 0) {
+      this.notify();
+    }
+    return res;
+  }
+
+  private persistToDisk(state: DatabaseState): void {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {
+      console.error('Failed to write to localStorage', e);
+    }
+  }
+
+  private notify() {
+    this.persistToDisk(this.state);
+    this.listeners.forEach((cb) => cb());
+  }
+
+  public subscribe(cb: () => void): () => void {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  }
+
+  public getState(): DatabaseState {
+    return this.state;
+  }
+
+  // --- Grade Operations ---
+  public getGradeRecord(key: string): GradeRecord | undefined {
+    return this.state.grades[key];
+  }
+
+  public saveGradeField(
+    academicYearId: string,
+    classId: string,
+    sectionId: string,
+    subjectId: string,
+    studentId: string,
+    field: 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore',
+    fieldArabic: string,
+    newValue: number | null,
+    reason?: string
+  ): { success: boolean; record: GradeRecord; error?: string } {
+    const key = buildGradeKey(academicYearId, classId, sectionId, subjectId, studentId);
+    const existing = this.state.grades[key] || {
+      id: key,
+      academicYearId,
+      classId,
+      sectionId,
+      subjectId,
+      studentId,
+      term1Score: null,
+      midtermScore: null,
+      term2Score: null,
+      termYearlyScore: null,
+      finalExamScore: null,
+      finalScore: null,
+      lastUpdated: new Date().toISOString(),
+      auditHistory: [],
+    };
+
+    const oldValue = existing[field];
+    const updatedRecord: GradeRecord = {
+      ...existing,
+      [field]: newValue,
+      lastUpdated: new Date().toISOString(),
+      auditHistory: existing.auditHistory ? [...existing.auditHistory] : [],
+    };
+
+    if (oldValue !== newValue) {
+      updatedRecord.auditHistory?.push({
+        field,
+        fieldArabic,
+        oldValue,
+        newValue,
+        timestamp: new Date().toISOString(),
+        reason,
+      });
+    }
+
+    // Recompute dependent yearly & final scores
+    const { termYearlyScore, finalScore } = recalculateGradeRecord(
+      updatedRecord,
+      this.state.settings.roundingRule
+    );
+    updatedRecord.termYearlyScore = termYearlyScore;
+    updatedRecord.finalScore = finalScore;
+
+    this.state.grades[key] = updatedRecord;
+    this.notify();
+
+    return { success: true, record: updatedRecord };
+  }
+
+  // --- Settings & Re-calculations ---
+  public updateSettings(settings: Partial<AppSettings>): void {
+    this.state.settings = { ...this.state.settings, ...settings };
+    
+    // Recalculate all grades if rounding rule changed
+    Object.keys(this.state.grades).forEach((key) => {
+      const g = this.state.grades[key];
+      const recalculated = recalculateGradeRecord(g, this.state.settings.roundingRule);
+      g.termYearlyScore = recalculated.termYearlyScore;
+      g.finalScore = recalculated.finalScore;
+    });
+
+    this.notify();
+  }
+
+  // --- Exemption Settings per Academic Year ---
+  public getDefaultExemptionSettings(academicYearId: string): ExemptionSettings {
+    return {
+      academicYearId,
+      generalMinAverage: 85,
+      generalMinSubjectScore: 75,
+      enableGeneralJabr: false,
+      individualMinScore: 90,
+      isConfigured: false,
+    };
+  }
+
+  public getExemptionSettings(academicYearId: string): ExemptionSettings {
+    if (!this.state.exemptionSettings) {
+      this.state.exemptionSettings = {};
+    }
+    if (this.state.exemptionSettings[academicYearId]) {
+      return this.state.exemptionSettings[academicYearId];
+    }
+    return this.getDefaultExemptionSettings(academicYearId);
+  }
+
+  public saveExemptionSettings(settings: ExemptionSettings): void {
+    if (!this.state.exemptionSettings) {
+      this.state.exemptionSettings = {};
+    }
+    this.state.exemptionSettings[settings.academicYearId] = {
+      ...settings,
+      isConfigured: true,
+      updatedAt: new Date().toISOString(),
+    };
+    this.notify();
+  }
+
+  // --- Entities Management ---
+  public isRegistrationNumberTaken(
+    regNum: string,
+    excludeStudentId?: string,
+    academicYearId?: string
+  ): { isTaken: boolean; existingStudent?: Student } {
+    if (!regNum || !regNum.trim()) return { isTaken: false };
+    const cleanReg = regNum.trim();
+    const existing = this.state.students.find((s) => {
+      if (excludeStudentId && s.id === excludeStudentId) return false;
+      if (academicYearId && s.academicYearId !== academicYearId) return false;
+      return s.registrationNumber && s.registrationNumber.trim() === cleanReg;
+    });
+    return { isTaken: !!existing, existingStudent: existing };
+  }
+
+  public addStudent(student: Omit<Student, 'id' | 'seatNumber'> & { seatNumber?: number }): Student {
+    const id = `stu-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const seatNumber = student.seatNumber || (this.state.students.filter(s => s.classId === student.classId && s.sectionId === student.sectionId).length + 1);
+    const newStudent: Student = {
+      ...student,
+      id,
+      seatNumber,
+      registrationNumber: student.registrationNumber?.trim() || `${1000 + this.state.students.length + 1}`,
+      fatherPhone: student.fatherPhone?.trim() || '',
+    };
+    this.state.students.push(newStudent);
+    this.notify();
+    return newStudent;
+  }
+
+  public updateStudent(student: Student): void {
+    const oldStudent = this.state.students.find((s) => s.id === student.id);
+    const oldClassId = oldStudent?.classId;
+    const oldSectionId = oldStudent?.sectionId;
+
+    this.state.students = this.state.students.map((s) => (s.id === student.id ? student : s));
+
+    // If section or class changed during edit, safely migrate grades as well
+    if (oldStudent && (oldClassId !== student.classId || oldSectionId !== student.sectionId)) {
+      this.migrateStudentGrades(student.id, student.academicYearId, student.classId, student.sectionId);
+    }
+
+    this.notify();
+  }
+
+  public transferStudent(
+    studentId: string,
+    newClassId: string,
+    newSectionId: string
+  ): { success: boolean; message?: string } {
+    const student = this.state.students.find((s) => s.id === studentId);
+    if (!student) {
+      return { success: false, message: 'لم يتم العثور على الطالب في السجلات.' };
+    }
+
+    student.classId = newClassId;
+    student.sectionId = newSectionId;
+
+    // Migrate all student's grades to new section/class keys without losing any past scores
+    this.migrateStudentGrades(studentId, student.academicYearId, newClassId, newSectionId);
+
+    this.notify();
+    return { success: true };
+  }
+
+  public migrateStudentGrades(
+    studentId: string,
+    academicYearId: string,
+    newClassId: string,
+    newSectionId: string
+  ): void {
+    const updatedGrades: Record<string, GradeRecord> = { ...this.state.grades };
+    Object.keys(this.state.grades).forEach((key) => {
+      const g = this.state.grades[key];
+      if (g.studentId === studentId && g.academicYearId === academicYearId) {
+        delete updatedGrades[key];
+        const newKey = buildGradeKey(
+          academicYearId,
+          newClassId,
+          newSectionId,
+          g.subjectId,
+          studentId
+        );
+        updatedGrades[newKey] = {
+          ...g,
+          id: newKey,
+          classId: newClassId,
+          sectionId: newSectionId,
+          lastUpdated: new Date().toISOString(),
+        };
+      }
+    });
+    this.state.grades = updatedGrades;
+  }
+
+  public addStudentsBatch(
+    studentsToImport: Array<{
+      name: string;
+      registrationNumber?: string;
+      fatherPhone?: string;
+      academicYearId: string;
+      classId: string;
+      sectionId: string;
+    }>
+  ): { addedCount: number; rejectedCount: number; errors: string[] } {
+    const errors: string[] = [];
+    let addedCount = 0;
+    let rejectedCount = 0;
+
+    const currentSectionStudents = this.state.students.filter(
+      (s) => studentsToImport.length > 0 && s.classId === studentsToImport[0].classId && s.sectionId === studentsToImport[0].sectionId
+    );
+    let nextSeat = currentSectionStudents.length + 1;
+
+    studentsToImport.forEach((item, index) => {
+      const rowNum = index + 1;
+      const cleanName = item.name ? item.name.trim() : '';
+      if (!cleanName) {
+        errors.push(`الصف ${rowNum}: اسم الطالب فارغ.`);
+        rejectedCount++;
+        return;
+      }
+
+      const cleanReg = item.registrationNumber ? item.registrationNumber.trim() : '';
+      if (cleanReg) {
+        const check = this.isRegistrationNumberTaken(cleanReg, undefined, item.academicYearId);
+        if (check.isTaken) {
+          errors.push(
+            `الصف ${rowNum}: رقم القيد «${cleanReg}» مسجل مسبقاً للطالب «${check.existingStudent?.name}».`
+          );
+          rejectedCount++;
+          return;
+        }
+      }
+
+      const id = `stu-${Date.now()}-${index}-${Math.floor(Math.random() * 1000)}`;
+      const newStudent: Student = {
+        id,
+        name: cleanName,
+        registrationNumber: cleanReg || String(1000 + this.state.students.length + 1),
+        fatherPhone: item.fatherPhone ? item.fatherPhone.trim() : '',
+        seatNumber: nextSeat++,
+        academicYearId: item.academicYearId,
+        classId: item.classId,
+        sectionId: item.sectionId,
+        gender: 'male',
+      };
+
+      this.state.students.push(newStudent);
+      addedCount++;
+    });
+
+    if (addedCount > 0) {
+      this.notify();
+    }
+
+    return { addedCount, rejectedCount, errors };
+  }
+
+  public deleteStudent(id: string): void {
+    this.state.students = this.state.students.filter((s) => s.id !== id);
+    // Remove student grades
+    Object.keys(this.state.grades).forEach((key) => {
+      if (this.state.grades[key].studentId === id) {
+        delete this.state.grades[key];
+      }
+    });
+    this.notify();
+  }
+
+  public isClassNameTaken(name: string, excludeId?: string): boolean {
+    const clean = name.trim().toLowerCase();
+    return this.state.classes.some(
+      (c) => c.name.trim().toLowerCase() === clean && c.id !== excludeId
+    );
+  }
+
+  public isSectionNameTaken(classId: string, name: string, excludeId?: string): boolean {
+    const clean = name.trim().toLowerCase();
+    return this.state.sections.some(
+      (s) => s.classId === classId && s.name.trim().toLowerCase() === clean && s.id !== excludeId
+    );
+  }
+
+  public addClass(schoolClass: Omit<SchoolClass, 'id'>): SchoolClass {
+    const id = `cls-${Date.now()}`;
+    const newClass: SchoolClass = { ...schoolClass, id };
+    this.state.classes.push(newClass);
+    this.notify();
+    return newClass;
+  }
+
+  public updateClass(schoolClass: SchoolClass): { success: boolean; message?: string } {
+    if (!schoolClass.name || !schoolClass.name.trim()) {
+      return { success: false, message: 'اسم الصف الدراسي مطلوب.' };
+    }
+    if (this.isClassNameTaken(schoolClass.name, schoolClass.id)) {
+      return { success: false, message: `اسم الصف «${schoolClass.name.trim()}» مسجل بالفعل.` };
+    }
+
+    const idx = this.state.classes.findIndex((c) => c.id === schoolClass.id);
+    if (idx === -1) {
+      return { success: false, message: 'لم يتم العثور على الصف الدراسي المطلوب.' };
+    }
+
+    this.state.classes[idx] = {
+      ...this.state.classes[idx],
+      name: schoolClass.name.trim(),
+      stage: schoolClass.stage,
+    };
+    this.notify();
+    return { success: true };
+  }
+
+  public canDeleteClass(classId: string): {
+    canDelete: boolean;
+    reason?: string;
+    counts: { sections: number; students: number; subjects: number; grades: number };
+  } {
+    const sectionsCount = this.state.sections.filter((s) => s.classId === classId).length;
+    const studentsCount = this.state.students.filter((s) => s.classId === classId).length;
+    const subjectsCount = this.state.subjects.filter((s) => s.classId === classId).length;
+    const gradesCount = Object.values(this.state.grades).filter((g) => g.classId === classId).length;
+
+    const counts = { sections: sectionsCount, students: studentsCount, subjects: subjectsCount, grades: gradesCount };
+
+    if (sectionsCount > 0 || studentsCount > 0 || subjectsCount > 0 || gradesCount > 0) {
+      const reasons: string[] = [];
+      if (sectionsCount > 0) reasons.push(`${sectionsCount} شعبة`);
+      if (studentsCount > 0) reasons.push(`${studentsCount} طالب`);
+      if (subjectsCount > 0) reasons.push(`${subjectsCount} مادة دراسية`);
+      if (gradesCount > 0) reasons.push(`${gradesCount} سجل درجات`);
+
+      return {
+        canDelete: false,
+        reason: `لا يمكن حذف هذا الصف لأنه مرتبط ببيانات فعلية (${reasons.join('، ')}). لحماية السجلات، لا يُسمح بالحذف المباشر للصفوف التي تحتوي على شعب أو طلاب أو درجات.`,
+        counts,
+      };
+    }
+
+    return { canDelete: true, counts };
+  }
+
+  public deleteClass(classId: string): { success: boolean; message?: string } {
+    const check = this.canDeleteClass(classId);
+    if (!check.canDelete) {
+      return { success: false, message: check.reason };
+    }
+
+    this.state.classes = this.state.classes.filter((c) => c.id !== classId);
+    this.notify();
+    return { success: true };
+  }
+
+  public addSection(section: Omit<Section, 'id'>): Section {
+    const id = `sec-${Date.now()}`;
+    const newSection: Section = { ...section, id };
+    this.state.sections.push(newSection);
+    this.notify();
+    return newSection;
+  }
+
+  public updateSection(section: Section): { success: boolean; message?: string } {
+    if (!section.name || !section.name.trim()) {
+      return { success: false, message: 'اسم أو رمز الشعبة مطلوب.' };
+    }
+    if (this.isSectionNameTaken(section.classId, section.name, section.id)) {
+      return { success: false, message: `الشعبة «${section.name.trim()}» مسجلة بالفعل لهذا الصف.` };
+    }
+
+    const idx = this.state.sections.findIndex((s) => s.id === section.id);
+    if (idx === -1) {
+      return { success: false, message: 'لم يتم العثور على الشعبة المطلوبة.' };
+    }
+
+    this.state.sections[idx] = {
+      ...this.state.sections[idx],
+      name: section.name.trim(),
+    };
+    this.notify();
+    return { success: true };
+  }
+
+  public canDeleteSection(sectionId: string): {
+    canDelete: boolean;
+    reason?: string;
+    counts: { students: number; grades: number };
+  } {
+    const studentsCount = this.state.students.filter((s) => s.sectionId === sectionId).length;
+    const gradesCount = Object.values(this.state.grades).filter((g) => g.sectionId === sectionId).length;
+    const counts = { students: studentsCount, grades: gradesCount };
+
+    if (studentsCount > 0 || gradesCount > 0) {
+      const reasons: string[] = [];
+      if (studentsCount > 0) reasons.push(`${studentsCount} طالب`);
+      if (gradesCount > 0) reasons.push(`${gradesCount} سجل درجات`);
+
+      return {
+        canDelete: false,
+        reason: `لا يمكن حذف هذه الشعبة لاحتوائها على (${reasons.join('، ')}). يرجى نقل الطلاب إلى شعبة أخرى عبر «إدارة الطلاب» أولاً قبل حذف الشعبة.`,
+        counts,
+      };
+    }
+
+    return { canDelete: true, counts };
+  }
+
+  public deleteSection(sectionId: string): { success: boolean; message?: string } {
+    const check = this.canDeleteSection(sectionId);
+    if (!check.canDelete) {
+      return { success: false, message: check.reason };
+    }
+
+    this.state.sections = this.state.sections.filter((s) => s.id !== sectionId);
+    this.notify();
+    return { success: true };
+  }
+
+  public addSubject(subject: Omit<Subject, 'id'>): Subject {
+    const id = `sub-${Date.now()}`;
+    const existingInClass = this.state.subjects.filter((s) => s.classId === subject.classId);
+    const maxOrder = existingInClass.reduce((max, s) => Math.max(max, s.order ?? 0), 0);
+    const order = typeof subject.order === 'number' && subject.order > 0 ? subject.order : maxOrder + 1;
+    const newSubject: Subject = { ...subject, id, order };
+    this.state.subjects.push(newSubject);
+    this.sortSubjectsInternal();
+    this.notify();
+    return newSubject;
+  }
+
+  public updateSubject(subject: Subject): void {
+    this.state.subjects = this.state.subjects.map((s) => (s.id === subject.id ? subject : s));
+    this.sortSubjectsInternal();
+    this.notify();
+  }
+
+  public deleteSubject(subjectId: string): void {
+    const target = this.state.subjects.find((s) => s.id === subjectId);
+    const classId = target?.classId;
+    this.state.subjects = this.state.subjects.filter((s) => s.id !== subjectId);
+
+    // Re-normalize consecutive order for remaining subjects in this class
+    if (classId) {
+      const remaining = this.state.subjects.filter((s) => s.classId === classId);
+      remaining.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      remaining.forEach((s, idx) => {
+        s.order = idx + 1;
+      });
+    }
+
+    // Clean up associated grade records for this subject without disturbing other subjects
+    Object.keys(this.state.grades).forEach((key) => {
+      if (this.state.grades[key].subjectId === subjectId) {
+        delete this.state.grades[key];
+      }
+    });
+
+    this.sortSubjectsInternal();
+    this.notify();
+  }
+
+  /**
+   * Reorder subjects for a given class based on the ordered list of subject IDs.
+   * Immediately saves new order to localStorage and notifies all subscribers.
+   */
+  public reorderSubjects(classId: string, orderedSubjectIds: string[]): void {
+    const idToOrder = new Map<string, number>();
+    orderedSubjectIds.forEach((id, index) => {
+      idToOrder.set(id, index + 1);
+    });
+
+    this.state.subjects = this.state.subjects.map((sub) => {
+      if (sub.classId === classId && idToOrder.has(sub.id)) {
+        return {
+          ...sub,
+          order: idToOrder.get(sub.id)!,
+        };
+      }
+      return sub;
+    });
+
+    this.sortSubjectsInternal();
+    this.notify();
+  }
+
+  public getSubjectsByClass(classId: string): Subject[] {
+    return this.state.subjects
+      .filter((s) => s.classId === classId)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }
+
+  private sortSubjectsInternal(): void {
+    this.state.subjects.sort((a, b) => {
+      if (a.classId !== b.classId) {
+        return a.classId.localeCompare(b.classId);
+      }
+      return (a.order ?? 0) - (b.order ?? 0);
+    });
+  }
+
+  public isAcademicYearNameTaken(name: string, excludeId?: string): boolean {
+    const clean = name.trim().toLowerCase();
+    return this.state.academicYears.some(
+      (y) => y.name.trim().toLowerCase() === clean && y.id !== excludeId
+    );
+  }
+
+  public addAcademicYear(year: Omit<AcademicYear, 'id'>): { success: boolean; year?: AcademicYear; message?: string } {
+    if (!year.name || !year.name.trim()) {
+      return { success: false, message: 'اسم العام الدراسي مطلوب.' };
+    }
+    if (this.isAcademicYearNameTaken(year.name)) {
+      return { success: false, message: `العام الدراسي «${year.name.trim()}» مسجل بالفعل مسبقاً.` };
+    }
+
+    const id = `ay-${Date.now()}`;
+    const newYear: AcademicYear = { ...year, name: year.name.trim(), id };
+    if (newYear.isCurrent) {
+      this.state.academicYears.forEach((y) => (y.isCurrent = false));
+    }
+    this.state.academicYears.push(newYear);
+    this.notify();
+    return { success: true, year: newYear };
+  }
+
+  public updateAcademicYear(id: string, name: string): { success: boolean; message?: string } {
+    if (!name || !name.trim()) {
+      return { success: false, message: 'اسم العام الدراسي مطلوب.' };
+    }
+    if (this.isAcademicYearNameTaken(name, id)) {
+      return { success: false, message: `العام الدراسي «${name.trim()}» مسجل بالفعل.` };
+    }
+
+    const idx = this.state.academicYears.findIndex((y) => y.id === id);
+    if (idx === -1) {
+      return { success: false, message: 'لم يتم العثور على العام الدراسي المطلوب.' };
+    }
+
+    this.state.academicYears[idx] = {
+      ...this.state.academicYears[idx],
+      name: name.trim(),
+    };
+    this.notify();
+    return { success: true };
+  }
+
+  public canDeleteAcademicYear(yearId: string): {
+    canDelete: boolean;
+    reason?: string;
+    counts: { students: number; grades: number; isCurrent: boolean; totalYears: number };
+  } {
+    const target = this.state.academicYears.find((y) => y.id === yearId);
+    const totalYears = this.state.academicYears.length;
+    const isCurrent = !!target?.isCurrent;
+    const studentsCount = this.state.students.filter((s) => s.academicYearId === yearId).length;
+    const gradesCount = Object.values(this.state.grades).filter(
+      (g) => g.academicYearId === yearId
+    ).length;
+
+    const counts = {
+      students: studentsCount,
+      grades: gradesCount,
+      isCurrent,
+      totalYears,
+    };
+
+    if (totalYears <= 1) {
+      return {
+        canDelete: false,
+        reason: 'لا يمكن حذف العام الدراسي لأنه العام الوحيد المسجل في النظام. يجب أن يحتوي النظام على عام دراسي واحد على الأقل.',
+        counts,
+      };
+    }
+
+    if (isCurrent) {
+      return {
+        canDelete: false,
+        reason: 'لا يمكن حذف العام الدراسي لأنه العام النشط والمعتمد حالياً في النظام. يرجى تعيين عام دراسي آخر كعام نشط أولاً قبل الحذف.',
+        counts,
+      };
+    }
+
+    if (studentsCount > 0 || gradesCount > 0) {
+      const reasons: string[] = [];
+      if (studentsCount > 0) reasons.push(`${studentsCount} طالب`);
+      if (gradesCount > 0) reasons.push(`${gradesCount} سجل درجات`);
+
+      return {
+        canDelete: false,
+        reason: `لا يمكن حذف هذا العام الدراسي لاحتوائه على بيانات وسجلات فعلية (${reasons.join('، ')}). لحماية سجلات ودرجات الطلاب التاريخية، لا يُسمح بالحذف المباشر للأعوام المرتبطة ببيانات.`,
+        counts,
+      };
+    }
+
+    return { canDelete: true, counts };
+  }
+
+  public deleteAcademicYear(yearId: string): { success: boolean; message?: string } {
+    const check = this.canDeleteAcademicYear(yearId);
+    if (!check.canDelete) {
+      return { success: false, message: check.reason };
+    }
+
+    this.state.academicYears = this.state.academicYears.filter((y) => y.id !== yearId);
+
+    // Clean up empty exemption settings for this year if any
+    if (this.state.exemptionSettings && this.state.exemptionSettings[yearId]) {
+      delete this.state.exemptionSettings[yearId];
+    }
+
+    this.notify();
+    return { success: true };
+  }
+
+  public setCurrentYear(id: string): void {
+    this.state.academicYears.forEach((y) => {
+      y.isCurrent = y.id === id;
+    });
+    this.notify();
+  }
+
+  // --- Backup & Restore ---
+  public exportJSON(): string {
+    const backup: DatabaseState = {
+      ...this.state,
+      lastBackupDate: new Date().toISOString(),
+    };
+    return JSON.stringify(backup, null, 2);
+  }
+
+  public importJSON(jsonStr: string): { success: boolean; message: string } {
+    try {
+      const parsed = JSON.parse(jsonStr) as DatabaseState;
+      if (!parsed.academicYears || !parsed.classes || !parsed.grades) {
+        return { success: false, message: 'ملف النسخة الاحتياطية غير صالح أو تالف.' };
+      }
+      this.state = parsed;
+      this.notify();
+      return { success: true, message: 'تم استعادة البيانات بنجاح تام.' };
+    } catch (e) {
+      return { success: false, message: `خطأ في قراءة ملف JSON: ${e instanceof Error ? e.message : 'تنسيق غير صحيح'}` };
+    }
+  }
+
+  public resetToDefault(): void {
+    const defaultState: DatabaseState = {
+      academicYears: INITIAL_YEARS,
+      classes: INITIAL_CLASSES,
+      sections: INITIAL_SECTIONS,
+      subjects: INITIAL_SUBJECTS,
+      students: INITIAL_STUDENTS_5SCI_A,
+      grades: generateInitialGrades(INITIAL_STUDENTS_5SCI_A, INITIAL_SUBJECTS, INITIAL_SETTINGS),
+      settings: INITIAL_SETTINGS,
+      version: '1.0.0',
+      lastBackupDate: new Date().toISOString(),
+    };
+    this.state = defaultState;
+    this.notify();
+  }
+
+  /**
+   * Generates a 100% compliant SQLite SQL script (DDL + DML)
+   * ready to be executed in sqlite3 or within an Electron desktop backend.
+   */
+  public exportSQLiteScript(): string {
+    const lines: string[] = [
+      '--',
+      '-- نظام إدارة الدرجات المدرسية - سكربت قاعدة بيانات SQLite',
+      `-- تاريخ التصدير: ${new Date().toLocaleString('ar-EG')}`,
+      '--',
+      'PRAGMA foreign_keys = ON;',
+      'BEGIN TRANSACTION;',
+      '',
+      '-- جدول الأعوام الدراسية',
+      'CREATE TABLE IF NOT EXISTS academic_years (',
+      '    id TEXT PRIMARY KEY,',
+      '    name TEXT NOT NULL,',
+      '    is_current INTEGER DEFAULT 0',
+      ');',
+      '',
+      '-- جدول الصفوف الدراسية',
+      'CREATE TABLE IF NOT EXISTS classes (',
+      '    id TEXT PRIMARY KEY,',
+      '    name TEXT NOT NULL,',
+      '    stage TEXT NOT NULL,',
+      '    sort_order INTEGER DEFAULT 1',
+      ');',
+      '',
+      '-- جدول الشعب',
+      'CREATE TABLE IF NOT EXISTS sections (',
+      '    id TEXT PRIMARY KEY,',
+      '    class_id TEXT NOT NULL,',
+      '    name TEXT NOT NULL,',
+      '    FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE',
+      ');',
+      '',
+      '-- جدول المواد الدراسية',
+      'CREATE TABLE IF NOT EXISTS subjects (',
+      '    id TEXT PRIMARY KEY,',
+      '    class_id TEXT NOT NULL,',
+      '    name TEXT NOT NULL,',
+      '    max_score REAL DEFAULT 100,',
+      '    pass_score REAL DEFAULT 50,',
+      '    sort_order INTEGER DEFAULT 1,',
+      '    FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE',
+      ');',
+      '',
+      '-- جدول الطلاب',
+      'CREATE TABLE IF NOT EXISTS students (',
+      '    id TEXT PRIMARY KEY,',
+      '    seat_number INTEGER NOT NULL,',
+      '    national_id TEXT,',
+      '    name TEXT NOT NULL,',
+      '    academic_year_id TEXT NOT NULL,',
+      '    class_id TEXT NOT NULL,',
+      '    section_id TEXT NOT NULL,',
+      '    gender TEXT DEFAULT "male",',
+      '    notes TEXT,',
+      '    FOREIGN KEY (academic_year_id) REFERENCES academic_years(id),',
+      '    FOREIGN KEY (class_id) REFERENCES classes(id),',
+      '    FOREIGN KEY (section_id) REFERENCES sections(id)',
+      ');',
+      '',
+      '-- جدول الدرجات المحفوظة',
+      'CREATE TABLE IF NOT EXISTS grades (',
+      '    id TEXT PRIMARY KEY,',
+      '    academic_year_id TEXT NOT NULL,',
+      '    class_id TEXT NOT NULL,',
+      '    section_id TEXT NOT NULL,',
+      '    subject_id TEXT NOT NULL,',
+      '    student_id TEXT NOT NULL,',
+      '    term1_score REAL,',
+      '    midterm_score REAL,',
+      '    term2_score REAL,',
+      '    term_yearly_score REAL,',
+      '    final_exam_score REAL,',
+      '    final_score REAL,',
+      '    last_updated TEXT NOT NULL,',
+      '    FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,',
+      '    FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE',
+      ');',
+      '',
+    ];
+
+    // Inserts for Academic Years
+    this.state.academicYears.forEach((y) => {
+      lines.push(`INSERT OR REPLACE INTO academic_years (id, name, is_current) VALUES ('${y.id}', '${y.name}', ${y.isCurrent ? 1 : 0});`);
+    });
+
+    // Inserts for Classes
+    this.state.classes.forEach((c) => {
+      lines.push(`INSERT OR REPLACE INTO classes (id, name, stage, sort_order) VALUES ('${c.id}', '${c.name}', '${c.stage}', ${c.order});`);
+    });
+
+    // Inserts for Sections
+    this.state.sections.forEach((s) => {
+      lines.push(`INSERT OR REPLACE INTO sections (id, class_id, name) VALUES ('${s.id}', '${s.classId}', '${s.name}');`);
+    });
+
+    // Inserts for Subjects
+    this.state.subjects.forEach((sub) => {
+      lines.push(`INSERT OR REPLACE INTO subjects (id, class_id, name, max_score, pass_score, sort_order) VALUES ('${sub.id}', '${sub.classId}', '${sub.name}', ${sub.maxScore}, ${sub.passScore}, ${sub.order});`);
+    });
+
+    // Inserts for Students
+    this.state.students.forEach((stu) => {
+      lines.push(`INSERT OR REPLACE INTO students (id, seat_number, national_id, name, academic_year_id, class_id, section_id, gender) VALUES ('${stu.id}', ${stu.seatNumber}, '${stu.nationalId || ''}', '${stu.name.replace(/'/g, "''")}', '${stu.academicYearId}', '${stu.classId}', '${stu.sectionId}', '${stu.gender}');`);
+    });
+
+    // Inserts for Grades
+    Object.values(this.state.grades).forEach((g) => {
+      const t1 = g.term1Score !== null ? g.term1Score : 'NULL';
+      const mid = g.midtermScore !== null ? g.midtermScore : 'NULL';
+      const t2 = g.term2Score !== null ? g.term2Score : 'NULL';
+      const yr = g.termYearlyScore !== null ? g.termYearlyScore : 'NULL';
+      const fe = g.finalExamScore !== null ? g.finalExamScore : 'NULL';
+      const fs = g.finalScore !== null ? g.finalScore : 'NULL';
+      lines.push(`INSERT OR REPLACE INTO grades (id, academic_year_id, class_id, section_id, subject_id, student_id, term1_score, midterm_score, term2_score, term_yearly_score, final_exam_score, final_score, last_updated) VALUES ('${g.id}', '${g.academicYearId}', '${g.classId}', '${g.sectionId}', '${g.subjectId}', '${g.studentId}', ${t1}, ${mid}, ${t2}, ${yr}, ${fe}, ${fs}, '${g.lastUpdated}');`);
+    });
+
+    // Users table creation and inserts for SQLite compatibility
+    lines.push('');
+    lines.push('-- جدول المستخدمين وإدارة الصلاحيات');
+    lines.push('CREATE TABLE IF NOT EXISTS users (');
+    lines.push('    id TEXT PRIMARY KEY,');
+    lines.push('    username TEXT UNIQUE NOT NULL,');
+    lines.push('    password_hash TEXT NOT NULL,');
+    lines.push('    salt TEXT NOT NULL,');
+    lines.push('    role TEXT NOT NULL,');
+    lines.push('    is_active INTEGER NOT NULL DEFAULT 1,');
+    lines.push('    must_change_password INTEGER NOT NULL DEFAULT 0,');
+    lines.push('    created_at TEXT NOT NULL,');
+    lines.push('    last_login TEXT');
+    lines.push(');');
+    lines.push('');
+
+    (this.state.users || []).forEach((u) => {
+      const ll = u.lastLogin ? `'${u.lastLogin}'` : 'NULL';
+      lines.push(`INSERT OR REPLACE INTO users (id, username, password_hash, salt, role, is_active, must_change_password, created_at, last_login) VALUES ('${u.id}', '${u.username.replace(/'/g, "''")}', '${u.passwordHash}', '${u.salt}', '${u.role}', ${u.isActive ? 1 : 0}, ${u.mustChangePassword ? 1 : 0}, '${u.createdAt}', ${ll});`);
+    });
+
+    lines.push('');
+    lines.push('COMMIT;');
+    return lines.join('\n');
+  }
+
+  // ==========================================
+  // User Management & Security Operations
+  // ==========================================
+  public getUsers(): UserAccount[] {
+    return this.state.users || [];
+  }
+
+  public getUserById(id: string): UserAccount | undefined {
+    return (this.state.users || []).find((u) => u.id === id);
+  }
+
+  public getActiveAdminsCount(): number {
+    return (this.state.users || []).filter((u) => u.role === 'admin' && u.isActive).length;
+  }
+
+  public canDeleteUser(id: string): { allowed: boolean; reason?: string } {
+    const user = this.getUserById(id);
+    if (!user) {
+      return { allowed: false, reason: 'المستخدم غير موجود' };
+    }
+    if (user.role === 'admin' && user.isActive && this.getActiveAdminsCount() <= 1) {
+      return {
+        allowed: false,
+        reason: 'لا يمكن حذف آخر مدير نشط في النظام! يجب الإبقاء على مدير واحد نشط على الأقل.',
+      };
+    }
+    return { allowed: true };
+  }
+
+  public canToggleUserStatus(id: string): { allowed: boolean; reason?: string } {
+    const user = this.getUserById(id);
+    if (!user) {
+      return { allowed: false, reason: 'المستخدم غير موجود' };
+    }
+    // If currently active and is admin, check if it's the last active admin
+    if (user.isActive && user.role === 'admin' && this.getActiveAdminsCount() <= 1) {
+      return {
+        allowed: false,
+        reason: 'لا يمكن تعطيل آخر مدير نشط في النظام! يجب الإبقاء على مدير واحد نشط على الأقل.',
+      };
+    }
+    return { allowed: true };
+  }
+
+  public addUser(userData: {
+    username: string;
+    passwordHash: string;
+    salt: string;
+    role: 'admin' | 'user';
+    isActive?: boolean;
+    mustChangePassword?: boolean;
+  }): { success: boolean; user?: UserAccount; error?: string } {
+    const trimmed = userData.username.trim();
+    if (!trimmed) {
+      return { success: false, error: 'اسم المستخدم مطلوب ولا يمكن أن يكون فارغاً' };
+    }
+    const duplicate = (this.state.users || []).find(
+      (u) => u.username.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (duplicate) {
+      return { success: false, error: 'اسم المستخدم هذا مستخدم بالفعل، يرجى اختيار اسم آخر' };
+    }
+
+    const newUser: UserAccount = {
+      id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      username: trimmed,
+      passwordHash: userData.passwordHash,
+      salt: userData.salt,
+      role: userData.role,
+      isActive: userData.isActive !== undefined ? userData.isActive : true,
+      mustChangePassword: userData.mustChangePassword ?? false,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (!this.state.users) {
+      this.state.users = [];
+    }
+    this.state.users.push(newUser);
+    this.notify();
+    return { success: true, user: newUser };
+  }
+
+  public updateUser(
+    id: string,
+    updates: Partial<UserAccount>
+  ): { success: boolean; error?: string } {
+    const user = this.getUserById(id);
+    if (!user) {
+      return { success: false, error: 'المستخدم غير موجود' };
+    }
+
+    if (updates.username && updates.username.trim()) {
+      const trimmed = updates.username.trim();
+      const duplicate = (this.state.users || []).find(
+        (u) => u.id !== id && u.username.toLowerCase() === trimmed.toLowerCase()
+      );
+      if (duplicate) {
+        return { success: false, error: 'اسم المستخدم هذا مستخدم بالفعل' };
+      }
+      user.username = trimmed;
+    }
+
+    if (updates.passwordHash && updates.salt) {
+      user.passwordHash = updates.passwordHash;
+      user.salt = updates.salt;
+    }
+
+    if (updates.role && updates.role !== user.role) {
+      // If demoting an admin to regular user, check last active admin
+      if (user.role === 'admin' && updates.role === 'user' && user.isActive && this.getActiveAdminsCount() <= 1) {
+        return {
+          success: false,
+          error: 'لا يمكن تحويل آخر مدير نشط إلى مستخدم عادي، يجب أن يبقى مدير نشط واحد على الأقل',
+        };
+      }
+      user.role = updates.role;
+    }
+
+    if (typeof updates.isActive === 'boolean') {
+      if (!updates.isActive) {
+        const check = this.canToggleUserStatus(id);
+        if (!check.allowed) {
+          return { success: false, error: check.reason };
+        }
+      }
+      user.isActive = updates.isActive;
+    }
+
+    if (typeof updates.mustChangePassword === 'boolean') {
+      user.mustChangePassword = updates.mustChangePassword;
+    }
+
+    this.notify();
+    return { success: true };
+  }
+
+  public toggleUserStatus(id: string): { success: boolean; error?: string; newStatus?: boolean } {
+    const user = this.getUserById(id);
+    if (!user) {
+      return { success: false, error: 'المستخدم غير موجود' };
+    }
+    if (user.isActive) {
+      const check = this.canToggleUserStatus(id);
+      if (!check.allowed) {
+        return { success: false, error: check.reason };
+      }
+    }
+    user.isActive = !user.isActive;
+    this.notify();
+    return { success: true, newStatus: user.isActive };
+  }
+
+  public deleteUser(id: string): { success: boolean; error?: string } {
+    const check = this.canDeleteUser(id);
+    if (!check.allowed) {
+      return { success: false, error: check.reason };
+    }
+    this.state.users = (this.state.users || []).filter((u) => u.id !== id);
+    this.notify();
+    return { success: true };
+  }
+
+  public updateUserLastLogin(id: string): void {
+    const user = this.getUserById(id);
+    if (user) {
+      user.lastLogin = new Date().toISOString();
+      this.notify();
+    }
+  }
+}
+
+// Global Singleton Instance for easy offline persistence
+export const db = new LocalStorageEngine();
+
