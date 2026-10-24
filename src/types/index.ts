@@ -1,12 +1,13 @@
-export type GradeStage = 'term1' | 'midterm' | 'term2' | 'final';
+export type GradeStage = 'term1' | 'midterm' | 'term2' | 'final' | 'second_round';
 
 export type ResultGradeType =
-  | 'term1Score'       // درجة الفصل الأول
-  | 'midtermScore'     // درجة نصف السنة
-  | 'term2Score'       // درجة الفصل الثاني
-  | 'termYearlyScore'  // درجة السعي السنوي
-  | 'finalExamScore'   // درجة الامتحان النهائي
-  | 'finalScore';      // الدرجة النهائية
+  | 'term1Score'              // درجة الفصل الأول
+  | 'midtermScore'            // درجة نصف السنة
+  | 'term2Score'              // درجة الفصل الثاني
+  | 'termYearlyScore'         // درجة السعي السنوي
+  | 'finalExamScore'          // درجة الامتحان النهائي
+  | 'finalScore'              // الدرجة النهائية (الدور الأول)
+  | 'secondRoundFinalScore';  // الدرجة النهائية بعد الإكمال
 
 export type RoundingRule = 
   | 'standard'     // تقريب رياضي لأقرب عدد صحيح (>= 0.5 للأعلى)
@@ -55,10 +56,12 @@ export interface Student {
   sectionId: string;
   gender?: 'male' | 'female';
   notes?: string;
+  isGeneralExempt?: boolean; // مشمول بالإعفاء العام
+  individualExemptions?: string[]; // مصفوفة بالمواد المعفى منها فردياً (subjectId)
 }
 
 export interface GradeAuditEntry {
-  field: 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore';
+  field: 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore' | 'secondRoundScore';
   fieldArabic: string;
   oldValue: number | null;
   newValue: number | null;
@@ -75,15 +78,94 @@ export interface GradeRecord {
   studentId: string;
   
   // Official Arabic columns
-  term1Score: number | null;       // درجة الفصل الأول
-  midtermScore: number | null;     // درجة نصف السنة
-  term2Score: number | null;       // درجة الفصل الثاني
-  termYearlyScore: number | null;  // درجة السعي السنوي (محسوبة تلقائياً)
-  finalExamScore: number | null;   // درجة الامتحان النهائي
-  finalScore: number | null;       // الدرجة النهائية (محسوبة تلقائياً)
+  term1Score: number | null;              // درجة الفصل الأول
+  midtermScore: number | null;            // درجة نصف السنة
+  term2Score: number | null;              // درجة الفصل الثاني
+  termYearlyScore: number | null;         // درجة السعي السنوي (محسوبة تلقائياً)
+  finalExamScore: number | null;          // درجة الامتحان النهائي (الدور الأول)
+  finalScore: number | null;              // الدرجة النهائية (الدور الأول، محسوبة تلقائياً)
+
+  // الدور الثاني والإكمال
+  secondRoundScore: number | null;        // درجة الإكمال (امتحان الدور الثاني)
+  secondRoundFinalScore: number | null;   // الدرجة النهائية بعد الإكمال (السعي + الإكمال ÷ 2)
+  secondRoundDate?: string;               // تاريخ ووقت رصد درجة الإكمال
+
+  // الإعفاء الفردي
+  isIndividualExempt?: boolean;           // مشمول بالإعفاء الفردي في هذه المادة
 
   lastUpdated: string;
   auditHistory?: GradeAuditEntry[];
+}
+
+export interface AcademicYearDecisionSettings {
+  academicYearId: string;
+  maxFailedSubjectsAllowed: number;              // عدد دروس الرسوب المسموح بها (الافتراضي: 4 مواد)
+  primaryAssistanceMarks: number;                // درجات المساعدة الوزارية الرئيسية (الافتراضي: 10 درجات)
+  secondRoundAdditionalAssistanceMarks: number;  // درجات المساعدة الوزارية الإضافية بعد الدور الثاني (الافتراضي: 0 درجات)
+  updatedAt?: string;
+}
+
+export interface SubjectEvaluation {
+  subject: Subject;
+  term1Score: number | null;
+  midtermScore: number | null;
+  term2Score: number | null;
+  termYearlyScore: number | null;
+  finalExamScore: number | null;
+  
+  // الدور الأول
+  rawFinalScore: number | null;
+  isGeneralExempt: boolean;
+  isIndividualExempt: boolean;
+  isExempt: boolean;
+  
+  // المساعدة الرئيسية (الدور الأول)
+  primaryAssistanceApplied: number;
+  finalScoreAfterPrimaryAssistance: number | null;
+  passed1stRound: boolean;
+  
+  // الدور الثاني والإكمال
+  isMakeUpEligible: boolean;
+  secondRoundScore: number | null;
+  secondRoundFinalScore: number | null;
+  secondRoundDate?: string;
+  
+  // المساعدة الإضافية والمتبقية بعد الدور الثاني
+  secondRoundAssistanceApplied: number;
+  finalScoreAfterSecondRoundAssistance: number | null;
+  passedFinal: boolean;
+  
+  // الدرجة المعروضة النهائية
+  effectiveFinalScore: number | null;
+}
+
+export interface StudentComprehensiveEvaluation {
+  student: Student;
+  academicYearId: string;
+  isComplete1stRound: boolean;
+  
+  isGeneralExempt: boolean;
+  
+  // نتائج الدور الأول
+  failedCountBeforeAssistance: number;
+  primaryAssistanceUsed: number;
+  primaryAssistanceRemaining: number;
+  failedCountAfterPrimaryAssistance: number;
+  status1stRound: 'ناجح' | 'مكمّل' | 'راسب' | 'غير مكتمل' | 'ناجح — إعفاء عام';
+  
+  // نتائج الدور الثاني والمساعدة الإضافية
+  totalAssistancePoolSecondRound: number;
+  secondRoundAssistanceUsed: number;
+  secondRoundAssistanceRemaining: number;
+  hasSecondRoundScores: boolean;
+  failedCountFinal: number;
+  statusFinal: 'ناجح' | 'مكمّل' | 'راسب' | 'غير مكتمل' | 'ناجح — إعفاء عام';
+  
+  // عمود الملاحظات
+  notes: 'ناجح' | 'مكمّل' | 'راسب' | 'ناجح — إعفاء عام' | 'غير مكتمل';
+  
+  subjects: Record<string, SubjectEvaluation>;
+  subjectsList: SubjectEvaluation[];
 }
 
 export interface AppSettings {

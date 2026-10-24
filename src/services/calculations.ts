@@ -7,6 +7,9 @@ import {
   ExemptionSettings,
   GeneralExemptionResult,
   IndividualExemptionSubjectResult,
+  AcademicYearDecisionSettings,
+  SubjectEvaluation,
+  StudentComprehensiveEvaluation,
 } from '../types';
 
 /**
@@ -84,23 +87,52 @@ export function calculateFinalScore(
 }
 
 /**
+ * حساب الدرجة النهائية بعد الإكمال:
+ * الدرجة النهائية بعد الإكمال = (السعي السنوي + درجة الإكمال) ÷ 2
+ * 
+ * قاعدة أساسية: إذا كان السعي أو درجة الإكمال فارغاً، لا تحسب النتيجة.
+ */
+export function calculateSecondRoundFinalScore(
+  yearlyScore: number | null,
+  secondRoundScore: number | null,
+  roundingRule: RoundingRule = 'standard'
+): number | null {
+  if (yearlyScore === null || secondRoundScore === null) {
+    return null;
+  }
+  if (isNaN(yearlyScore) || isNaN(secondRoundScore)) {
+    return null;
+  }
+
+  const rawAverage = (yearlyScore + secondRoundScore) / 2;
+  return applyRounding(rawAverage, roundingRule);
+}
+
+/**
  * إعادة حساب وتحديث سجل الدرجات بالكامل
  */
 export function recalculateGradeRecord(
   record: Partial<GradeRecord>,
   roundingRule: RoundingRule = 'standard'
-): { termYearlyScore: number | null; finalScore: number | null } {
+): {
+  termYearlyScore: number | null;
+  finalScore: number | null;
+  secondRoundFinalScore: number | null;
+} {
   const term1 = record.term1Score !== undefined ? record.term1Score : null;
   const midterm = record.midtermScore !== undefined ? record.midtermScore : null;
   const term2 = record.term2Score !== undefined ? record.term2Score : null;
   const finalExam = record.finalExamScore !== undefined ? record.finalExamScore : null;
+  const secondRound = record.secondRoundScore !== undefined ? record.secondRoundScore : null;
 
   const termYearlyScore = calculateTermYearlyScore(term1, midterm, term2, roundingRule);
   const finalScore = calculateFinalScore(termYearlyScore, finalExam, roundingRule);
+  const secondRoundFinalScore = calculateSecondRoundFinalScore(termYearlyScore, secondRound, roundingRule);
 
   return {
     termYearlyScore,
     finalScore,
+    secondRoundFinalScore,
   };
 }
 
@@ -122,6 +154,8 @@ export function isGradeEnteredForStage(
       return record.term2Score !== null && !isNaN(record.term2Score);
     case 'final':
       return record.finalExamScore !== null && !isNaN(record.finalExamScore);
+    case 'second_round':
+      return record.secondRoundScore !== null && !isNaN(record.secondRoundScore);
     default:
       return false;
   }
@@ -354,3 +388,281 @@ export function evaluateStudentExemption(
     isNearEligible,
   };
 }
+
+/**
+ * التقييم الشامل لنتائج الطالب في الدور الأول والدور الثاني
+ * وإدارة المساعدة الوزارية والإعفاءات وتحديد حالة الطالب في عمود الملاحظات
+ */
+export function evaluateStudentAcademicYearDecisions(
+  student: Student,
+  classSubjects: Subject[],
+  studentGrades: Record<string, GradeRecord | undefined>,
+  decisionSettings: AcademicYearDecisionSettings,
+  roundingRule: RoundingRule = 'standard'
+): StudentComprehensiveEvaluation {
+  const isGeneralExempt = student.isGeneralExempt === true;
+
+  // Initialize subject evaluation structures
+  const subjectsMap: Record<string, SubjectEvaluation> = {};
+  const subjectsList: SubjectEvaluation[] = [];
+
+  let hasIncomplete1stRound = false;
+
+  classSubjects.forEach((sub) => {
+    const rec = studentGrades[sub.id];
+    const isIndividualExempt =
+      student.individualExemptions?.includes(sub.id) === true ||
+      rec?.isIndividualExempt === true;
+    const isExempt = isGeneralExempt || isIndividualExempt;
+
+    const term1 = rec?.term1Score ?? null;
+    const midterm = rec?.midtermScore ?? null;
+    const term2 = rec?.term2Score ?? null;
+    const termYearlyScore = rec?.termYearlyScore ?? null;
+    const finalExamScore = rec?.finalExamScore ?? null;
+    const secondRoundScore = rec?.secondRoundScore ?? null;
+    const secondRoundDate = rec?.secondRoundDate;
+
+    let rawFinalScore: number | null = null;
+    let passed1stRound = false;
+
+    if (isExempt) {
+      // الطالب المعفى (عاماً أو فردياً): يُعتبر السعي السنوي هو الدرجة النهائية
+      rawFinalScore = termYearlyScore;
+      passed1stRound = termYearlyScore !== null;
+    } else {
+      rawFinalScore = calculateFinalScore(termYearlyScore, finalExamScore, roundingRule);
+      if (rawFinalScore !== null && rawFinalScore >= sub.passScore) {
+        passed1stRound = true;
+      }
+      if (termYearlyScore === null || finalExamScore === null) {
+        hasIncomplete1stRound = true;
+      }
+    }
+
+    const subEval: SubjectEvaluation = {
+      subject: sub,
+      term1Score: term1,
+      midtermScore: midterm,
+      term2Score: term2,
+      termYearlyScore,
+      finalExamScore,
+      rawFinalScore,
+      isGeneralExempt,
+      isIndividualExempt,
+      isExempt,
+      primaryAssistanceApplied: 0,
+      finalScoreAfterPrimaryAssistance: rawFinalScore,
+      passed1stRound,
+      isMakeUpEligible: false,
+      secondRoundScore,
+      secondRoundFinalScore: null,
+      secondRoundDate,
+      secondRoundAssistanceApplied: 0,
+      finalScoreAfterSecondRoundAssistance: rawFinalScore,
+      passedFinal: passed1stRound,
+      effectiveFinalScore: rawFinalScore,
+    };
+
+    subjectsMap[sub.id] = subEval;
+    subjectsList.push(subEval);
+  });
+
+  // 1. حساب المساعدة الوزارية الرئيسية في الدور الأول (Primary Ministerial Assistance)
+  let primaryAssistanceUsed = 0;
+  let remainingPrimary = Math.max(0, decisionSettings.primaryAssistanceMarks);
+
+  // حصر المواد الراسبة في الدور الأول (التي لم تعفَ ودرجتها النهائية < 50)
+  const failed1stRoundSubs = subjectsList.filter(
+    (s) => !s.isExempt && s.rawFinalScore !== null && s.rawFinalScore < s.subject.passScore
+  );
+
+  const failedCountBeforeAssistance = failed1stRoundSubs.length;
+
+  if (!isGeneralExempt) {
+    // ترتيب المواد الراسبة حسب الأقرب إلى درجة النجاح 50 (أقل عجز أولاً لإنقاذ أكبر عدد من المواد)
+    const sortedFailing = [...failed1stRoundSubs].sort((a, b) => {
+      const deficitA = a.subject.passScore - (a.rawFinalScore ?? 0);
+      const deficitB = b.subject.passScore - (b.rawFinalScore ?? 0);
+      return deficitA - deficitB;
+    });
+
+    sortedFailing.forEach((subEval) => {
+      const needed = subEval.subject.passScore - (subEval.rawFinalScore ?? 0);
+      if (needed > 0 && remainingPrimary >= needed) {
+        // منح المقدار المطلوب فقط لتصل الدرجة إلى 50 بالضبط
+        subEval.primaryAssistanceApplied = needed;
+        subEval.finalScoreAfterPrimaryAssistance = subEval.subject.passScore;
+        subEval.passed1stRound = true;
+        subEval.passedFinal = true;
+        subEval.effectiveFinalScore = subEval.subject.passScore;
+        primaryAssistanceUsed += needed;
+        remainingPrimary -= needed;
+      } else {
+        // الرصيد لا يكفي للوصول إلى 50: لا تُضاف أي درجات وتبقى المادة راسبة
+        subEval.primaryAssistanceApplied = 0;
+        subEval.finalScoreAfterPrimaryAssistance = subEval.rawFinalScore;
+        subEval.passed1stRound = false;
+        subEval.passedFinal = false;
+        subEval.effectiveFinalScore = subEval.rawFinalScore;
+      }
+    });
+  }
+
+  const primaryAssistanceRemaining = remainingPrimary;
+
+  // احتساب عدد المواد الراسبة بعد المساعدة الرئيسية
+  const failedCountAfterPrimaryAssistance = subjectsList.filter((s) => !s.passed1stRound).length;
+
+  // تحديد حالة الطالب في الدور الأول
+  let status1stRound: 'ناجح' | 'مكمّل' | 'راسب' | 'غير مكتمل' | 'ناجح — إعفاء عام' = 'غير مكتمل';
+  if (isGeneralExempt) {
+    status1stRound = 'ناجح — إعفاء عام';
+  } else if (hasIncomplete1stRound) {
+    status1stRound = 'غير مكتمل';
+  } else if (failedCountAfterPrimaryAssistance === 0) {
+    status1stRound = 'ناجح';
+  } else if (failedCountAfterPrimaryAssistance < decisionSettings.maxFailedSubjectsAllowed) {
+    status1stRound = 'مكمّل';
+  } else {
+    status1stRound = 'راسب';
+  }
+
+  // 2. معالجة الدور الثاني والإكمال (Second Round / Make-up Exam)
+  // لا يُتاح امتحان الإكمال إلا للطالب المكمّل في المواد التي رسب فيها حصراً
+  const isStudentMokammal = status1stRound === 'مكمّل';
+
+  let hasSecondRoundScores = false;
+
+  subjectsList.forEach((subEval) => {
+    if (isStudentMokammal && !subEval.passed1stRound) {
+      subEval.isMakeUpEligible = true;
+
+      if (subEval.secondRoundScore !== null && subEval.secondRoundScore !== undefined) {
+        hasSecondRoundScores = true;
+        const mkFinal = calculateSecondRoundFinalScore(
+          subEval.termYearlyScore,
+          subEval.secondRoundScore,
+          roundingRule
+        );
+        subEval.secondRoundFinalScore = mkFinal;
+
+        if (mkFinal !== null && mkFinal >= subEval.subject.passScore) {
+          // نجح الطالب في الدور الثاني دون الحاجة إلى مساعدة
+          subEval.passedFinal = true;
+          subEval.effectiveFinalScore = mkFinal;
+        } else {
+          // راسب مؤقتاً في الدور الثاني بانتظار تطبيق المساعدة المتبقية والإضافية
+          subEval.passedFinal = false;
+          subEval.effectiveFinalScore = mkFinal;
+        }
+      }
+    } else {
+      subEval.isMakeUpEligible = false;
+    }
+  });
+
+  // 3. المساعدة المتبقية والإضافية بعد الدور الثاني
+  // رصيد المساعدة المتاح بعد الدور الثاني = درجات المساعدة الرئيسية المتبقية + درجات المساعدة الإضافية
+  const totalAssistancePoolSecondRound =
+    primaryAssistanceRemaining + Math.max(0, decisionSettings.secondRoundAdditionalAssistanceMarks || 0);
+
+  let available2ndPool = totalAssistancePoolSecondRound;
+  let secondRoundAssistanceUsed = 0;
+
+  if (isStudentMokammal && hasSecondRoundScores) {
+    // حصر المواد الراسبة بعد الإكمال
+    const failingAfter2ndRound = subjectsList.filter(
+      (s) =>
+        s.isMakeUpEligible &&
+        s.secondRoundFinalScore !== null &&
+        s.secondRoundFinalScore < s.subject.passScore
+    );
+
+    // ترتيب تصاعدي حسب العجز
+    const sortedFailing2nd = [...failingAfter2ndRound].sort((a, b) => {
+      const defA = a.subject.passScore - (a.secondRoundFinalScore ?? 0);
+      const defB = b.subject.passScore - (b.secondRoundFinalScore ?? 0);
+      return defA - defB;
+    });
+
+    sortedFailing2nd.forEach((subEval) => {
+      const needed = subEval.subject.passScore - (subEval.secondRoundFinalScore ?? 0);
+      if (needed > 0 && available2ndPool >= needed) {
+        // رصيد المساعدة يكفي للوصول إلى 50: تُضاف الحاجة فقط لتصبح 50 بالضبط
+        subEval.secondRoundAssistanceApplied = needed;
+        subEval.finalScoreAfterSecondRoundAssistance = subEval.subject.passScore;
+        subEval.passedFinal = true;
+        subEval.effectiveFinalScore = subEval.subject.passScore;
+        secondRoundAssistanceUsed += needed;
+        available2ndPool -= needed;
+      } else {
+        // رصيد المساعدة لا يكفي لإيصال الطالب إلى 50: لا تُضاف أي مساعدة إطلاقاً ويبقى راسباً
+        subEval.secondRoundAssistanceApplied = 0;
+        subEval.finalScoreAfterSecondRoundAssistance = subEval.secondRoundFinalScore;
+        subEval.passedFinal = false;
+        subEval.effectiveFinalScore = subEval.secondRoundFinalScore;
+      }
+    });
+  }
+
+  const secondRoundAssistanceRemaining = available2ndPool;
+
+  // احتساب عدد المواد الراسبة النهائية
+  const failedCountFinal = subjectsList.filter((s) => !s.passedFinal).length;
+
+  // تحديد الحالة النهائية وعمود الملاحظات
+  let statusFinal: 'ناجح' | 'مكمّل' | 'راسب' | 'غير مكتمل' | 'ناجح — إعفاء عام' = status1stRound;
+  let notes: 'ناجح' | 'مكمّل' | 'راسب' | 'ناجح — إعفاء عام' | 'غير مكتمل' = status1stRound;
+
+  if (isGeneralExempt) {
+    statusFinal = 'ناجح — إعفاء عام';
+    notes = 'ناجح — إعفاء عام';
+  } else if (hasIncomplete1stRound) {
+    statusFinal = 'غير مكتمل';
+    notes = 'غير مكتمل';
+  } else if (status1stRound === 'راسب') {
+    statusFinal = 'راسب';
+    notes = 'راسب';
+  } else if (status1stRound === 'ناجح') {
+    statusFinal = 'ناجح';
+    notes = 'ناجح';
+  } else if (isStudentMokammal) {
+    if (hasSecondRoundScores) {
+      if (failedCountFinal === 0) {
+        statusFinal = 'ناجح';
+        notes = 'ناجح';
+      } else {
+        // بعد الدور الثاني، وجود أي مادة رسوب متبقية يعني الرسوب في السنة
+        statusFinal = 'راسب';
+        notes = 'راسب';
+      }
+    } else {
+      // لم يؤدِّ الدور الثاني بعد أو لم تُدخل درجاته
+      statusFinal = 'مكمّل';
+      notes = 'مكمّل';
+    }
+  }
+
+  return {
+    student,
+    academicYearId: decisionSettings.academicYearId,
+    isComplete1stRound: !hasIncomplete1stRound,
+    isGeneralExempt,
+    failedCountBeforeAssistance,
+    primaryAssistanceUsed,
+    primaryAssistanceRemaining,
+    failedCountAfterPrimaryAssistance,
+    status1stRound,
+    totalAssistancePoolSecondRound,
+    secondRoundAssistanceUsed,
+    secondRoundAssistanceRemaining,
+    hasSecondRoundScores,
+    failedCountFinal,
+    statusFinal,
+    notes,
+    subjects: subjectsMap,
+    subjectsList,
+  };
+}
+

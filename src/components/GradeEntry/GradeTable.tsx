@@ -1,6 +1,18 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Student, GradeRecord, GradeStage, AppSettings } from '../../types';
-import { validateScoreInput, formatScore } from '../../services/calculations';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import {
+  Student,
+  GradeRecord,
+  GradeStage,
+  AppSettings,
+  Subject,
+  StudentComprehensiveEvaluation,
+} from '../../types';
+import {
+  validateScoreInput,
+  formatScore,
+  evaluateStudentAcademicYearDecisions,
+} from '../../services/calculations';
+import { db } from '../../services/storage';
 import { EditConfirmationModal } from './EditConfirmationModal';
 import { Check, AlertCircle, Lock, Edit3, MoveHorizontal, RotateCcw } from 'lucide-react';
 
@@ -11,15 +23,25 @@ interface GradeTableProps {
   maxScore: number;
   settings: AppSettings;
   searchQuery: string;
+  academicYearId?: string;
+  classId?: string;
+  sectionId?: string;
+  subjectId?: string;
+  classSubjects?: Subject[];
   onSaveGrade: (
     studentId: string,
-    field: 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore',
+    field: 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore' | 'secondRoundScore',
     fieldArabic: string,
     value: number | null
   ) => { success: boolean; error?: string };
 }
 
-type EditableField = 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore';
+type EditableField =
+  | 'term1Score'
+  | 'midtermScore'
+  | 'term2Score'
+  | 'finalExamScore'
+  | 'secondRoundScore';
 
 export type ColumnKey =
   | 'index'
@@ -29,7 +51,9 @@ export type ColumnKey =
   | 'term2'
   | 'termYearly'
   | 'finalExam'
-  | 'finalScore';
+  | 'finalScore'
+  | 'secondRound'
+  | 'secondRoundFinal';
 
 export interface ColumnWidths {
   index: number;
@@ -40,6 +64,8 @@ export interface ColumnWidths {
   termYearly: number;
   finalExam: number;
   finalScore: number;
+  secondRound: number;
+  secondRoundFinal: number;
 }
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
@@ -51,6 +77,8 @@ export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
   termYearly: 150,
   finalExam: 150,
   finalScore: 150,
+  secondRound: 140,
+  secondRoundFinal: 150,
 };
 
 const COLUMN_LIMITS: Record<ColumnKey, { min: number; max: number }> = {
@@ -62,6 +90,8 @@ const COLUMN_LIMITS: Record<ColumnKey, { min: number; max: number }> = {
   termYearly: { min: 120, max: 290 },
   finalExam: { min: 120, max: 290 },
   finalScore: { min: 120, max: 290 },
+  secondRound: { min: 110, max: 280 },
+  secondRoundFinal: { min: 120, max: 290 },
 };
 
 interface PendingConfirmation {
@@ -79,12 +109,69 @@ export const GradeTable: React.FC<GradeTableProps> = ({
   maxScore,
   settings,
   searchQuery,
+  academicYearId,
+  classId,
+  sectionId,
+  subjectId,
+  classSubjects,
   onSaveGrade,
 }) => {
   // Filter students based on search query without breaking seat numbers or sorting
   const filteredStudents = students.filter((s) =>
     s.name.toLowerCase().includes(searchQuery.trim().toLowerCase())
   );
+
+  // Decision settings for this academic year
+  const decisionSettings = useMemo(() => {
+    if (!academicYearId) return null;
+    return db.getDecisionSettings(academicYearId);
+  }, [academicYearId]);
+
+  // Compute evaluations for make-up eligibility & status
+  const studentsEvaluations = useMemo(() => {
+    if (!academicYearId || !classId || !sectionId || !classSubjects || !decisionSettings) {
+      return {};
+    }
+    const map: Record<string, StudentComprehensiveEvaluation> = {};
+    students.forEach((student) => {
+      map[student.id] = evaluateStudentAcademicYearDecisions(
+        student,
+        academicYearId,
+        classId,
+        sectionId,
+        classSubjects,
+        grades,
+        decisionSettings,
+        settings.roundingRule
+      );
+    });
+    return map;
+  }, [students, academicYearId, classId, sectionId, classSubjects, grades, decisionSettings, settings.roundingRule]);
+
+  // Determine make-up eligibility for this subject
+  const getSubjectMakeUpEligibility = useCallback((studentId: string): { eligible: boolean; reason: string } => {
+    const evalData = studentsEvaluations[studentId];
+    if (!evalData) {
+      return { eligible: true, reason: '' };
+    }
+    if (evalData.isGeneralExempt) {
+      return { eligible: false, reason: 'مغلق: الطالب مشمول بالإعفاء العام' };
+    }
+    const subEval = evalData.subjects.find((s) => s.subjectId === subjectId);
+    if (subEval?.isIndividualExempt) {
+      return { eligible: false, reason: 'مغلق: الطالب معفى فردياً في هذه المادة' };
+    }
+    if (evalData.statusBeforeSecondRound === 'راسب') {
+      return { eligible: false, reason: 'مغلق: الطالب راسب بحد الرسوب (رسب في 4 مواد أو أكثر)' };
+    }
+    if (evalData.statusBeforeSecondRound === 'ناجح') {
+      return { eligible: false, reason: 'مغلق: الطالب ناجح في الدور الأول' };
+    }
+    if (subEval && subEval.passed1stRound) {
+      return { eligible: false, reason: `مغلق: ناجح في هذه المادة في الدور الأول (${subEval.finalScoreAfterPrimaryAssistance})` };
+    }
+    return { eligible: true, reason: 'مؤهل لامتحان الدور الثاني (مكمّل في هذه المادة)' };
+  }, [studentsEvaluations, subjectId]);
 
   // Column widths with localStorage persistence
   const [colWidths, setColWidths] = useState<ColumnWidths>(() => {
@@ -216,6 +303,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
     midterm: 'midtermScore',
     term2: 'term2Score',
     final: 'finalExamScore',
+    second_round: 'secondRoundScore',
   };
 
   const primaryField = primaryFieldForStage[currentStage];
@@ -225,6 +313,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
     midtermScore: 'midterm',
     term2Score: 'term2',
     finalExamScore: 'finalExam',
+    secondRoundScore: 'secondRound',
   };
 
   // Helper to get field title in Arabic
@@ -238,6 +327,8 @@ export const GradeTable: React.FC<GradeTableProps> = ({
         return 'درجة الفصل الثاني';
       case 'finalExamScore':
         return 'درجة الامتحان النهائي';
+      case 'secondRoundScore':
+        return 'درجة الإكمال (الدور الثاني)';
     }
   };
 
@@ -248,12 +339,14 @@ export const GradeTable: React.FC<GradeTableProps> = ({
       midtermScore: 2,
       term2Score: 3,
       finalExamScore: 4,
+      secondRoundScore: 5,
     };
     const currentOrder: Record<GradeStage, number> = {
       term1: 1,
       midterm: 2,
       term2: 3,
       final: 4,
+      second_round: 5,
     };
     return stageOrder[field] < currentOrder[currentStage];
   };
@@ -270,6 +363,14 @@ export const GradeTable: React.FC<GradeTableProps> = ({
   const startEditing = (studentIndex: number, field: EditableField, forceBypassConfirmation = false) => {
     const student = filteredStudents[studentIndex];
     if (!student) return;
+
+    // Check make-up eligibility if editing secondRoundScore
+    if (field === 'secondRoundScore') {
+      const eligibility = getSubjectMakeUpEligibility(student.id);
+      if (!eligibility.eligible) {
+        return;
+      }
+    }
 
     const gradeRecord = Object.values(grades).find((g) => g.studentId === student.id);
     const currentValue = gradeRecord ? gradeRecord[field] : null;
@@ -436,6 +537,29 @@ export const GradeTable: React.FC<GradeTableProps> = ({
       );
     }
 
+    // Special lock enforcement for second round / make-up score
+    if (field === 'secondRoundScore') {
+      const eligibility = getSubjectMakeUpEligibility(student.id);
+      if (!eligibility.eligible) {
+        return (
+          <td
+            key={field}
+            data-col={widthKey}
+            style={cellWidthStyle}
+            className="p-2 text-center font-mono text-xs border-b border-l border-slate-800/80 bg-slate-950/70 text-slate-500 select-none cursor-not-allowed"
+            title={eligibility.reason}
+          >
+            <div className="flex items-center justify-center gap-1.5 opacity-60">
+              <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <span className="text-[11px] font-sans truncate max-w-[110px]">
+                {eligibility.reason.replace('مغلق: ', '')}
+              </span>
+            </div>
+          </td>
+        );
+      }
+    }
+
     const isEmpty = score === null || score === undefined;
 
     return (
@@ -494,7 +618,8 @@ export const GradeTable: React.FC<GradeTableProps> = ({
     score: number | null | undefined,
     label: string,
     keySuffix: string,
-    widthKey: ColumnKey
+    widthKey: ColumnKey,
+    isIndividualExempt?: boolean
   ) => {
     const isMissing = score === null || score === undefined;
     const cellWidthStyle = {
@@ -503,27 +628,42 @@ export const GradeTable: React.FC<GradeTableProps> = ({
       maxWidth: `${colWidths[widthKey]}px`,
     };
 
+    let colorClasses = isMissing
+      ? 'bg-amber-950/10 text-amber-500/80 border-amber-900/20'
+      : score >= settings.passScoreDefault
+      ? 'bg-emerald-950/20 text-emerald-400 border-emerald-900/30'
+      : 'bg-red-950/30 text-red-400 border-red-900/30';
+
+    if (isIndividualExempt) {
+      colorClasses = 'bg-blue-950/40 text-blue-300 border-blue-900/40';
+    }
+
     return (
       <td
         key={keySuffix}
         data-col={widthKey}
         data-empty={isMissing ? "true" : undefined}
         style={cellWidthStyle}
-        className={`p-2.5 text-center font-mono text-sm font-bold border-b border-l border-slate-800/80 ${
+        className={`p-2.5 text-center font-mono text-sm font-bold border-b border-l border-slate-800/80 ${colorClasses}`}
+        title={
           isMissing
-            ? 'bg-amber-950/10 text-amber-500/80 border-amber-900/20'
-            : score >= settings.passScoreDefault
-            ? 'bg-emerald-950/20 text-emerald-400 border-emerald-900/30'
-            : 'bg-red-950/30 text-red-400 border-red-900/30'
-        }`}
-        title={isMissing ? `في انتظار اكتمال الدرجات لحساب ${label}` : `${label}: ${score}`}
+            ? `في انتظار اكتمال الدرجات لحساب ${label}`
+            : `${label}: ${score}${isIndividualExempt ? ' (معفى فردياً)' : ''}`
+        }
       >
         {isMissing ? (
           <span className="text-xs text-amber-400/70 font-sans">
             — ناقصة —
           </span>
         ) : (
-          <span className="text-base font-extrabold">{score}</span>
+          <div className="flex items-center justify-center gap-1.5">
+            <span className="text-base font-extrabold">{score}</span>
+            {isIndividualExempt && (
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 font-sans border border-blue-500/30">
+                معفى فردي
+              </span>
+            )}
+          </div>
         )}
       </td>
     );
@@ -559,19 +699,25 @@ export const GradeTable: React.FC<GradeTableProps> = ({
             <col style={{ width: `${colWidths.index}px` }} />
             <col style={{ width: `${colWidths.studentName}px` }} />
             <col style={{ width: `${colWidths.term1}px` }} />
-            {(currentStage === 'midterm' || currentStage === 'term2' || currentStage === 'final') && (
+            {(currentStage === 'midterm' || currentStage === 'term2' || currentStage === 'final' || currentStage === 'second_round') && (
               <col style={{ width: `${colWidths.midterm}px` }} />
             )}
-            {(currentStage === 'term2' || currentStage === 'final') && (
+            {(currentStage === 'term2' || currentStage === 'final' || currentStage === 'second_round') && (
               <>
                 <col style={{ width: `${colWidths.term2}px` }} />
                 <col style={{ width: `${colWidths.termYearly}px` }} />
               </>
             )}
-            {currentStage === 'final' && (
+            {(currentStage === 'final' || currentStage === 'second_round') && (
               <>
                 <col style={{ width: `${colWidths.finalExam}px` }} />
                 <col style={{ width: `${colWidths.finalScore}px` }} />
+              </>
+            )}
+            {currentStage === 'second_round' && (
+              <>
+                <col style={{ width: `${colWidths.secondRound}px` }} />
+                <col style={{ width: `${colWidths.secondRoundFinal}px` }} />
               </>
             )}
           </colgroup>
@@ -630,7 +776,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
               </th>
 
               {/* Stage 2 Column: درجة نصف السنة */}
-              {(currentStage === 'midterm' || currentStage === 'term2' || currentStage === 'final') && (
+              {(currentStage === 'midterm' || currentStage === 'term2' || currentStage === 'final' || currentStage === 'second_round') && (
                 <th
                   style={{
                     width: `${colWidths.midterm}px`,
@@ -648,7 +794,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
               )}
 
               {/* Stage 3 Column: درجة الفصل الثاني */}
-              {(currentStage === 'term2' || currentStage === 'final') && (
+              {(currentStage === 'term2' || currentStage === 'final' || currentStage === 'second_round') && (
                 <th
                   style={{
                     width: `${colWidths.term2}px`,
@@ -666,7 +812,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
               )}
 
               {/* Auto Calculated: درجة السعي السنوي */}
-              {(currentStage === 'term2' || currentStage === 'final') && (
+              {(currentStage === 'term2' || currentStage === 'final' || currentStage === 'second_round') && (
                 <th
                   style={{
                     width: `${colWidths.termYearly}px`,
@@ -684,23 +830,27 @@ export const GradeTable: React.FC<GradeTableProps> = ({
               )}
 
               {/* Stage 4 Column: درجة الامتحان النهائي */}
-              {currentStage === 'final' && (
+              {(currentStage === 'final' || currentStage === 'second_round') && (
                 <th
                   style={{
                     width: `${colWidths.finalExam}px`,
                     minWidth: `${colWidths.finalExam}px`,
                     maxWidth: `${colWidths.finalExam}px`,
                   }}
-                  className="relative p-3 text-center border-b border-l border-slate-800 bg-emerald-950/60 text-emerald-300 border-b-2 border-b-emerald-500"
+                  className={`relative p-3 text-center border-b border-l border-slate-800 ${
+                    currentStage === 'final'
+                      ? 'bg-emerald-950/60 text-emerald-300 border-b-2 border-b-emerald-500'
+                      : 'bg-slate-900 text-slate-400'
+                  }`}
                 >
                   <span>درجة الامتحان النهائي</span>
-                  <span className="block text-[10px] text-emerald-400 font-normal">● قيد الإدخال</span>
+                  {currentStage === 'final' && <span className="block text-[10px] text-emerald-400 font-normal">● قيد الإدخال</span>}
                   {renderResizeHandle('finalExam')}
                 </th>
               )}
 
               {/* Auto Calculated: الدرجة النهائية */}
-              {currentStage === 'final' && (
+              {(currentStage === 'final' || currentStage === 'second_round') && (
                 <th
                   style={{
                     width: `${colWidths.finalScore}px`,
@@ -716,24 +866,64 @@ export const GradeTable: React.FC<GradeTableProps> = ({
                   {renderResizeHandle('finalScore')}
                 </th>
               )}
+
+              {/* Stage 5 Column: درجة الإكمال (الدور الثاني) */}
+              {currentStage === 'second_round' && (
+                <th
+                  style={{
+                    width: `${colWidths.secondRound}px`,
+                    minWidth: `${colWidths.secondRound}px`,
+                    maxWidth: `${colWidths.secondRound}px`,
+                  }}
+                  className="relative p-3 text-center border-b border-l border-slate-800 bg-purple-950/60 text-purple-300 border-b-2 border-b-purple-500"
+                >
+                  <span>درجة الإكمال</span>
+                  <span className="block text-[10px] text-purple-400 font-normal">● الدور الثاني</span>
+                  {renderResizeHandle('secondRound')}
+                </th>
+              )}
+
+              {/* Auto Calculated: الدرجة النهائية بعد الإكمال */}
+              {currentStage === 'second_round' && (
+                <th
+                  style={{
+                    width: `${colWidths.secondRoundFinal}px`,
+                    minWidth: `${colWidths.secondRoundFinal}px`,
+                    maxWidth: `${colWidths.secondRoundFinal}px`,
+                  }}
+                  className="relative p-3 text-center border-b border-l border-slate-800 bg-slate-900 text-purple-300 font-black"
+                >
+                  <div className="flex flex-col items-center">
+                    <span>النهائية بعد الإكمال</span>
+                    <span className="text-[10px] text-purple-400/80 font-normal">(السعي + الإكمال ÷2)</span>
+                  </div>
+                  {renderResizeHandle('secondRoundFinal')}
+                </th>
+              )}
             </tr>
           </thead>
 
           <tbody>
             {filteredStudents.length === 0 ? (
               <tr>
-                <td colSpan={8} className="text-center py-12 text-slate-500 text-sm border-b border-slate-800 bg-slate-950">
+                <td colSpan={10} className="text-center py-12 text-slate-500 text-sm border-b border-slate-800 bg-slate-950">
                   {searchQuery ? 'لا توجد نتائج مطابقة لاسم الطالب المبحوث عنه.' : 'لا يوجد طلاب مسجلون في هذه الشعبة.'}
                 </td>
               </tr>
             ) : (
               filteredStudents.map((student, sIdx) => {
                 const gradeRecord = Object.values(grades).find((g) => g.studentId === student.id);
+                const evalData = studentsEvaluations[student.id];
+                const isGeneralExempt = !!evalData?.isGeneralExempt;
+                const subEval = evalData?.subjects.find((s) => s.subjectId === subjectId);
+                const isIndividualExempt = !!subEval?.isIndividualExempt;
 
                 return (
                   <tr
                     key={student.id}
-                    className="hover:bg-slate-900/50 transition-colors group"
+                    className={`hover:bg-slate-900/50 transition-colors group ${
+                      isGeneralExempt ? 'bg-emerald-950/25 hover:bg-emerald-950/35' : ''
+                    }`}
                   >
                     {/* Sticky Column 1: Index */}
                     <td
@@ -761,12 +951,19 @@ export const GradeTable: React.FC<GradeTableProps> = ({
                       className="p-2.5 border-b border-l-2 border-l-slate-700 border-slate-800/80 bg-slate-950 group-hover:bg-slate-900 z-[25] shadow-[-4px_0_10px_-2px_rgba(0,0,0,0.6)] transition-colors overflow-hidden"
                     >
                       <div className="flex items-center justify-between gap-2 overflow-hidden">
-                        <span
-                          className="font-bold text-slate-200 text-sm group-hover:text-emerald-400 transition-colors truncate block flex-1"
-                          title={student.name}
-                        >
-                          {student.name}
-                        </span>
+                        <div className="flex items-center gap-2 truncate flex-1">
+                          <span
+                            className="font-bold text-slate-200 text-sm group-hover:text-emerald-400 transition-colors truncate block"
+                            title={student.name}
+                          >
+                            {student.name}
+                          </span>
+                          {isGeneralExempt && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
+                              إعفاء عام
+                            </span>
+                          )}
+                        </div>
                         <span
                           className="text-[11px] text-slate-500 font-mono shrink-0"
                           title={`رقم القيد: ${student.registrationNumber || student.seatNumber}`}
@@ -786,7 +983,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
                     )}
 
                     {/* Column 2: درجة نصف السنة */}
-                    {(currentStage === 'midterm' || currentStage === 'term2' || currentStage === 'final') &&
+                    {(currentStage === 'midterm' || currentStage === 'term2' || currentStage === 'final' || currentStage === 'second_round') &&
                       renderScoreCell(
                         student,
                         sIdx,
@@ -796,7 +993,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
                       )}
 
                     {/* Column 3: درجة الفصل الثاني */}
-                    {(currentStage === 'term2' || currentStage === 'final') &&
+                    {(currentStage === 'term2' || currentStage === 'final' || currentStage === 'second_round') &&
                       renderScoreCell(
                         student,
                         sIdx,
@@ -806,7 +1003,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
                       )}
 
                     {/* Auto Column: درجة السعي السنوي */}
-                    {(currentStage === 'term2' || currentStage === 'final') &&
+                    {(currentStage === 'term2' || currentStage === 'final' || currentStage === 'second_round') &&
                       renderComputedCell(
                         gradeRecord?.termYearlyScore,
                         'درجة السعي السنوي',
@@ -815,22 +1012,42 @@ export const GradeTable: React.FC<GradeTableProps> = ({
                       )}
 
                     {/* Column 5: درجة الامتحان النهائي */}
-                    {currentStage === 'final' &&
+                    {(currentStage === 'final' || currentStage === 'second_round') &&
                       renderScoreCell(
                         student,
                         sIdx,
                         'finalExamScore',
                         'درجة الامتحان النهائي',
-                        true
+                        currentStage === 'final'
                       )}
 
                     {/* Auto Column: الدرجة النهائية */}
-                    {currentStage === 'final' &&
+                    {(currentStage === 'final' || currentStage === 'second_round') &&
                       renderComputedCell(
                         gradeRecord?.finalScore,
                         'الدرجة النهائية',
                         `final_${student.id}`,
-                        'finalScore'
+                        'finalScore',
+                        isIndividualExempt
+                      )}
+
+                    {/* Stage 5 Column: درجة الإكمال (الدور الثاني) */}
+                    {currentStage === 'second_round' &&
+                      renderScoreCell(
+                        student,
+                        sIdx,
+                        'secondRoundScore',
+                        'درجة الإكمال',
+                        true
+                      )}
+
+                    {/* Auto Column: الدرجة النهائية بعد الإكمال */}
+                    {currentStage === 'second_round' &&
+                      renderComputedCell(
+                        gradeRecord?.secondRoundFinalScore,
+                        'الدرجة النهائية بعد الإكمال',
+                        `second_final_${student.id}`,
+                        'secondRoundFinal'
                       )}
                   </tr>
                 );

@@ -8,8 +8,10 @@ import {
   GradeRecord,
   AppSettings,
   ResultGradeType,
+  StudentComprehensiveEvaluation,
 } from '../../types';
-import { buildGradeKey } from '../../services/storage';
+import { buildGradeKey, db } from '../../services/storage';
+import { evaluateStudentAcademicYearDecisions } from '../../services/calculations';
 import * as XLSX from 'xlsx';
 import {
   Trophy,
@@ -29,6 +31,7 @@ import {
   Eye,
   X,
   School,
+  HelpCircle,
 } from 'lucide-react';
 import { SchoolLogo } from '../Common/SchoolLogo';
 
@@ -81,6 +84,12 @@ export const GRADE_TYPE_CONFIG: Record<
     shortLabel: 'الدرجة النهائية',
     description: 'النتيجة العامة والدرجة النهائية المحسوبة آلياً',
     badgeColor: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+  },
+  secondRoundFinalScore: {
+    label: 'الدرجة النهائية بعد الإكمال',
+    shortLabel: 'بعد الإكمال',
+    description: 'الدرجة النهائية بعد احتساب امتحان الدور الثاني للمكمّلين',
+    badgeColor: 'text-purple-400 bg-purple-500/10 border-purple-500/20',
   },
 };
 
@@ -152,7 +161,12 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
   const activeSection = sections.find((s) => s.id === selectedSectionId);
   const activeGradeConfig = GRADE_TYPE_CONFIG[selectedGradeType];
 
-  // Aggregate results per student across subjects according to selectedGradeType
+  // Active administrative decision settings for this academic year
+  const decisionSettings = useMemo(() => {
+    return db.getDecisionSettings(selectedYearId);
+  }, [selectedYearId]);
+
+  // Aggregate results per student across subjects according to selectedGradeType & official regulations
   const studentResults = useMemo(() => {
     return sectionStudents.map((student) => {
       let totalScore = 0;
@@ -161,6 +175,17 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
       let hasIncomplete = false;
 
       const subjectScores: Record<string, number | null> = {};
+
+      const evaluation = evaluateStudentAcademicYearDecisions(
+        student,
+        selectedYearId,
+        selectedClassId,
+        selectedSectionId,
+        classSubjects,
+        grades,
+        decisionSettings,
+        settings.roundingRule
+      );
 
       classSubjects.forEach((sub) => {
         const key = buildGradeKey(
@@ -173,7 +198,16 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
         const record = grades[key];
 
         // Read specific score field requested
-        const score = record ? record[selectedGradeType] : null;
+        let score: number | null = null;
+        if (selectedGradeType === 'finalScore') {
+          const subEval = evaluation.subjects.find((s) => s.subjectId === sub.id);
+          score = subEval ? subEval.effectiveFinalScore : (record?.finalScore ?? null);
+        } else if (selectedGradeType === 'secondRoundFinalScore') {
+          score = record?.secondRoundFinalScore ?? null;
+        } else {
+          score = record ? record[selectedGradeType] : null;
+        }
+
         subjectScores[sub.id] = score;
 
         if (score !== null && score !== undefined && !isNaN(score)) {
@@ -196,16 +230,13 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
         ? Math.round((totalScore / classSubjects.length) * 10) / 10
         : null;
 
-      // Result Status: ناجح (Passed), مكمل (1-2 failed subjects), راسب (Failed), غير مكتمل (Incomplete)
-      let status: 'ناجح' | 'مكمل' | 'راسب' | 'غير مكتمل' = 'غير مكتمل';
-      if (isComplete) {
-        if (failedSubjectsCount === 0) status = 'ناجح';
-        else if (failedSubjectsCount <= 2) status = 'مكمل';
-        else status = 'راسب';
-      }
+      // Result Status and Notes directly from Ministerial Decisions Engine
+      const status = evaluation.statusFinal;
+      const notes = evaluation.notes;
 
       return {
         student,
+        evaluation,
         totalScore,
         countedSubjects,
         failedSubjectsCount,
@@ -213,10 +244,21 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
         isComplete,
         average,
         status,
+        notes,
         subjectScores,
       };
     });
-  }, [sectionStudents, classSubjects, selectedYearId, selectedClassId, selectedSectionId, selectedGradeType, grades]);
+  }, [
+    sectionStudents,
+    classSubjects,
+    selectedYearId,
+    selectedClassId,
+    selectedSectionId,
+    selectedGradeType,
+    grades,
+    decisionSettings,
+    settings.roundingRule,
+  ]);
 
   // Filter students based on search query
   const filteredResults = useMemo(() => {
@@ -234,12 +276,12 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
   const classStats = useMemo(() => {
     const total = studentResults.length;
     if (total === 0) {
-      return { total: 0, completed: 0, passed: 0, failed: 0, incomplete: 0, passRate: 0, highestAvg: null };
+      return { total: 0, completed: 0, passed: 0, supplementary: 0, failed: 0, incomplete: 0, passRate: 0, highestAvg: null };
     }
 
     const completed = studentResults.filter((r) => r.isComplete).length;
-    const passed = studentResults.filter((r) => r.status === 'ناجح').length;
-    const supplementary = studentResults.filter((r) => r.status === 'مكمل').length;
+    const passed = studentResults.filter((r) => r.status === 'ناجح' || r.status === 'ناجح — إعفاء عام').length;
+    const supplementary = studentResults.filter((r) => r.status === 'مكمّل' || r.status === 'مكمل').length;
     const failed = studentResults.filter((r) => r.status === 'راسب').length;
     const incomplete = studentResults.filter((r) => r.status === 'غير مكتمل').length;
 
@@ -265,7 +307,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
   // Top 10 Students ranking based on completed average in this selected grade type
   const topStudents = useMemo(() => {
     return [...studentResults]
-      .filter((r) => r.average !== null && r.isComplete && r.status === 'ناجح')
+      .filter((r) => r.average !== null && r.isComplete && (r.status === 'ناجح' || r.status === 'ناجح — إعفاء عام'))
       .sort((a, b) => (b.average || 0) - (a.average || 0))
       .slice(0, 10);
   }, [studentResults]);
@@ -282,6 +324,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
       'المجموع',
       'المعدل',
       'النتيجة',
+      'الملاحظات',
     ];
 
     const rows = studentResults.map((r, idx) => {
@@ -296,6 +339,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
         r.isComplete ? r.totalScore : (r.countedSubjects > 0 ? `${r.totalScore} (جزئي)` : '—'),
         r.average !== null ? `${r.average}%` : '—',
         r.status,
+        r.notes,
       ];
       return row;
     });
@@ -317,6 +361,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
       { wch: 12 },
       { wch: 12 },
       { wch: 14 },
+      { wch: 18 },
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, activeGradeConfig.shortLabel);
@@ -425,71 +470,85 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
         <tbody>
           {filteredResults.length === 0 ? (
             <tr>
-              <td colSpan={classSubjects.length + 5} className="py-8 text-center text-slate-500 font-bold">
+              <td colSpan={classSubjects.length + 6} className="py-8 text-center text-slate-500 font-bold">
                 لا توجد نتائج مسجلة مطابقة للاختيارات الحالية.
               </td>
             </tr>
           ) : (
-            filteredResults.map((r, idx) => (
-              <tr key={r.student.id} className={idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}>
-                <td className="border border-black p-1 text-center font-mono font-bold text-xs">{idx + 1}</td>
-                <td className="border border-black p-1 text-center font-mono text-xs text-slate-800">
-                  {r.student.registrationNumber || r.student.seatNumber || '—'}
-                </td>
-                <td className="border border-black p-1 pr-2 text-right font-bold text-xs text-black">
-                  {r.student.name}
-                </td>
-                {classSubjects.map((sub) => {
-                  const score = r.subjectScores[sub.id];
-                  const isNull = score === null || score === undefined || isNaN(score);
-                  const isPass = !isNull && score >= sub.passScore;
-                  return (
-                    <td
-                      key={sub.id}
-                      className={`border border-black p-1 text-center font-mono text-xs ${
-                        isNull
-                          ? 'text-slate-400'
-                          : isPass
-                          ? 'font-medium text-black'
-                          : 'font-black text-rose-700 bg-rose-50/90'
+            filteredResults.map((r, idx) => {
+              const isGeneralExempt = r.evaluation.isGeneralExempt;
+              return (
+                <tr
+                  key={r.student.id}
+                  className={isGeneralExempt ? 'bg-emerald-50' : (idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white')}
+                  style={isGeneralExempt ? { backgroundColor: '#ecfdf5' } : undefined}
+                >
+                  <td className="border border-black p-1 text-center font-mono font-bold text-xs">{idx + 1}</td>
+                  <td className="border border-black p-1 text-center font-mono text-xs text-slate-800">
+                    {r.student.registrationNumber || r.student.seatNumber || '—'}
+                  </td>
+                  <td className="border border-black p-1 pr-2 text-right font-bold text-xs text-black">
+                    <div className="flex items-center justify-between">
+                      <span>{r.student.name}</span>
+                      {isGeneralExempt && (
+                        <span className="text-[9px] font-bold px-1 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          إعفاء عام
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  {classSubjects.map((sub) => {
+                    const score = r.subjectScores[sub.id];
+                    const isNull = score === null || score === undefined || isNaN(score);
+                    const isPass = !isNull && score >= sub.passScore;
+                    const subEval = r.evaluation.subjects.find((s) => s.subjectId === sub.id);
+                    const isIndivExempt = !!subEval?.isIndividualExempt;
+
+                    return (
+                      <td
+                        key={sub.id}
+                        style={isIndivExempt ? { backgroundColor: '#eff6ff' } : undefined}
+                        className={`border border-black p-1 text-center font-mono text-xs ${
+                          isIndivExempt
+                            ? 'font-bold text-blue-900 bg-blue-50'
+                            : isNull
+                            ? 'text-slate-400'
+                            : isPass
+                            ? 'font-medium text-black'
+                            : 'font-black text-rose-700 bg-rose-50/90'
+                        }`}
+                      >
+                        {isNull ? '—' : score}
+                      </td>
+                    );
+                  })}
+                  <td className="border border-black p-1 text-center font-mono font-bold text-xs bg-slate-50">
+                    {r.isComplete ? r.totalScore : r.countedSubjects > 0 ? `${r.totalScore}*` : '—'}
+                  </td>
+                  <td className="border border-black p-1 text-center font-mono font-bold text-xs bg-slate-50">
+                    {r.average !== null ? `${r.average}%` : '—'}
+                  </td>
+                  <td className="border border-black p-1 text-center font-bold text-xs">
+                    <span
+                      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-black ${
+                        r.status === 'ناجح' || r.status === 'ناجح — إعفاء عام'
+                          ? 'text-emerald-800 bg-emerald-50 border border-emerald-300'
+                          : r.status === 'مكمّل' || r.status === 'مكمل'
+                          ? 'text-amber-800 bg-amber-50 border border-amber-300'
+                          : r.status === 'راسب'
+                          ? 'text-rose-800 bg-rose-50 border border-rose-300'
+                          : 'text-slate-600 bg-slate-100'
                       }`}
                     >
-                      {isNull ? '—' : score}
-                    </td>
-                  );
-                })}
-                <td className="border border-black p-1 text-center font-mono font-bold text-xs bg-slate-50">
-                  {r.isComplete ? r.totalScore : r.countedSubjects > 0 ? `${r.totalScore}*` : '—'}
-                </td>
-                <td className="border border-black p-1 text-center font-mono font-bold text-xs bg-slate-50">
-                  {r.average !== null ? `${r.average}%` : '—'}
-                </td>
-                <td className="border border-black p-1 text-center font-bold text-xs">
-                  <span
-                    className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-black ${
-                      r.status === 'ناجح'
-                        ? 'text-emerald-800 bg-emerald-50 border border-emerald-300'
-                        : r.status === 'مكمل'
-                        ? 'text-amber-800 bg-amber-50 border border-amber-300'
-                        : r.status === 'راسب'
-                        ? 'text-rose-800 bg-rose-50 border border-rose-300'
-                        : 'text-slate-600 bg-slate-100'
-                    }`}
-                  >
-                    {r.status}
-                  </span>
-                </td>
-                <td className="border border-black p-1 text-center text-[10px] text-slate-700">
-                  {r.status === 'مكمل'
-                    ? `إكمال (${r.failedSubjectsCount})`
-                    : r.status === 'راسب'
-                    ? `راسب (${r.failedSubjectsCount})`
-                    : !r.isComplete
-                    ? 'غير مكتمل'
-                    : '—'}
-                </td>
-              </tr>
-            ))
+                      {r.status}
+                    </span>
+                  </td>
+                  <td className="border border-black p-1 text-center text-[10px] font-bold text-slate-800">
+                    {r.notes}
+                  </td>
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>
@@ -802,8 +861,11 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
               <th className="p-3 text-center min-w-[90px] border-l border-slate-800 bg-slate-850 text-emerald-400 font-mono">
                 المعدل
               </th>
-              <th className="p-3 text-center min-w-[110px] bg-slate-850 text-white">
+              <th className="p-3 text-center min-w-[100px] bg-slate-850 text-white border-l border-slate-800">
                 النتيجة
+              </th>
+              <th className="p-3 text-center min-w-[140px] bg-slate-850 text-white">
+                الملاحظات
               </th>
             </tr>
           </thead>
@@ -811,7 +873,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
           <tbody className="divide-y divide-slate-800/60">
             {filteredResults.length === 0 ? (
               <tr>
-                <td colSpan={classSubjects.length + 5} className="py-12 text-center text-slate-400">
+                <td colSpan={classSubjects.length + 6} className="py-12 text-center text-slate-400">
                   <p className="text-sm font-bold">لا توجد نتائج مطابقة للشروط أو البحث الحالي</p>
                   <p className="text-xs text-slate-500 mt-1">
                     تأكد من اختيار العام الدراسي والصف والشعبة الصحيحة، أو تحقق من عبارة البحث.
@@ -819,78 +881,132 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                 </td>
               </tr>
             ) : (
-              filteredResults.map((r, idx) => (
-                <tr key={r.student.id} className="hover:bg-slate-900/40 transition-colors">
-                  <td className="p-2.5 text-center text-xs text-slate-400 font-mono border-l border-slate-800">
-                    {idx + 1}
-                  </td>
-                  <td className="p-2.5 border-l border-slate-800">
-                    <div className="font-bold text-sm text-slate-200">{r.student.name}</div>
-                    {r.student.registrationNumber && (
-                      <div className="text-[11px] text-slate-500 font-mono">
-                        قيد: {r.student.registrationNumber}
+              filteredResults.map((r, idx) => {
+                const isGeneralExempt = r.evaluation.isGeneralExempt;
+
+                return (
+                  <tr
+                    key={r.student.id}
+                    className={`hover:bg-slate-900/40 transition-colors ${
+                      isGeneralExempt ? 'bg-emerald-950/25 hover:bg-emerald-950/35' : ''
+                    }`}
+                  >
+                    <td className="p-2.5 text-center text-xs text-slate-400 font-mono border-l border-slate-800">
+                      {idx + 1}
+                    </td>
+                    <td className="p-2.5 border-l border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-slate-200">{r.student.name}</span>
+                        {isGeneralExempt && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                            إعفاء عام
+                          </span>
+                        )}
                       </div>
-                    )}
-                  </td>
+                      {r.student.registrationNumber && (
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          قيد: {r.student.registrationNumber}
+                        </div>
+                      )}
+                    </td>
 
-                  {/* Subject Scores for selected grade type */}
-                  {classSubjects.map((sub) => {
-                    const score = r.subjectScores[sub.id];
-                    const isNull = score === null || score === undefined || isNaN(score);
-                    const isPass = !isNull && score >= sub.passScore;
+                    {/* Subject Scores for selected grade type */}
+                    {classSubjects.map((sub) => {
+                      const score = r.subjectScores[sub.id];
+                      const isNull = score === null || score === undefined || isNaN(score);
+                      const isPass = !isNull && score >= sub.passScore;
+                      const subEval = r.evaluation.subjects.find((s) => s.subjectId === sub.id);
+                      const isIndivExempt = !!subEval?.isIndividualExempt;
 
-                    return (
-                      <td
-                        key={sub.id}
-                        className={`p-2.5 text-center font-mono text-sm border-l border-slate-800 ${
-                          isNull
-                            ? 'text-slate-500 bg-slate-900/20'
-                            : isPass
-                            ? 'text-slate-200'
-                            : 'text-red-400 font-bold bg-red-950/30'
+                      return (
+                        <td
+                          key={sub.id}
+                          className={`p-2.5 text-center font-mono text-sm border-l border-slate-800 ${
+                            isIndivExempt
+                              ? 'bg-blue-950/30 text-blue-300 font-bold border-blue-900/40'
+                              : isNull
+                              ? 'text-slate-500 bg-slate-900/20'
+                              : isPass
+                              ? 'text-slate-200 font-medium'
+                              : 'text-red-400 font-bold bg-red-950/30'
+                          }`}
+                        >
+                          <div className="flex items-center justify-center gap-1">
+                            <span>{isNull ? '—' : score}</span>
+                            {isIndivExempt && (
+                              <span className="text-[9px] px-1 py-0.2 rounded bg-blue-500/20 text-blue-300 font-sans border border-blue-500/30">
+                                معفى
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
+
+                    {/* Total Score */}
+                    <td className="p-2.5 text-center font-mono font-bold text-white border-l border-slate-800 bg-slate-950/40">
+                      {r.isComplete ? (
+                        r.totalScore
+                      ) : r.countedSubjects > 0 ? (
+                        <span className="text-slate-400 text-xs" title="مجموع جزئي - توجد درجات غير مكتملة">
+                          {r.totalScore}*
+                        </span>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
+                    </td>
+
+                    {/* Average */}
+                    <td className="p-2.5 text-center font-mono font-bold text-emerald-400 border-l border-slate-800 bg-slate-950/40">
+                      {r.average !== null ? `${r.average}%` : <span className="text-slate-500 font-normal">—</span>}
+                    </td>
+
+                    {/* Status Badge */}
+                    <td className="p-2.5 text-center border-l border-slate-800">
+                      <span
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                          r.status === 'ناجح' || r.status === 'ناجح — إعفاء عام'
+                            ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                            : r.status === 'مكمّل' || r.status === 'مكمل'
+                            ? 'bg-amber-950 text-amber-400 border-amber-800'
+                            : r.status === 'راسب'
+                            ? 'bg-red-950 text-red-400 border-red-800'
+                            : 'bg-slate-800/80 text-slate-400 border-slate-700'
                         }`}
                       >
-                        {isNull ? '—' : score}
-                      </td>
-                    );
-                  })}
-
-                  {/* Total Score */}
-                  <td className="p-2.5 text-center font-mono font-bold text-white border-l border-slate-800 bg-slate-950/40">
-                    {r.isComplete ? (
-                      r.totalScore
-                    ) : r.countedSubjects > 0 ? (
-                      <span className="text-slate-400 text-xs" title="مجموع جزئي - توجد درجات غير مكتملة">
-                        {r.totalScore}*
+                        {r.status}
                       </span>
-                    ) : (
-                      <span className="text-slate-500">—</span>
-                    )}
-                  </td>
+                    </td>
 
-                  {/* Average */}
-                  <td className="p-2.5 text-center font-mono font-bold text-emerald-400 border-l border-slate-800 bg-slate-950/40">
-                    {r.average !== null ? `${r.average}%` : <span className="text-slate-500 font-normal">—</span>}
-                  </td>
+                    {/* Notes Badge */}
+                    <td className="p-2.5 text-center">
+                      <div className="flex flex-col items-center gap-1">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                            r.notes === 'ناجح — إعفاء عام'
+                              ? 'bg-emerald-950/90 text-emerald-300 border-emerald-700 shadow-xs'
+                              : r.notes === 'ناجح'
+                              ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                              : r.notes === 'مكمّل'
+                              ? 'bg-amber-950 text-amber-300 border-amber-700'
+                              : r.notes === 'راسب'
+                              ? 'bg-rose-950 text-rose-300 border-rose-700'
+                              : 'bg-slate-800 text-slate-400 border-slate-700'
+                          }`}
+                        >
+                          {r.notes}
+                        </span>
 
-                  {/* Status Badge */}
-                  <td className="p-2.5 text-center">
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                        r.status === 'ناجح'
-                          ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
-                          : r.status === 'مكمل'
-                          ? 'bg-amber-950 text-amber-400 border-amber-800'
-                          : r.status === 'راسب'
-                          ? 'bg-red-950 text-red-400 border-red-800'
-                          : 'bg-slate-800/80 text-slate-400 border-slate-700'
-                      }`}
-                    >
-                      {r.status}
-                    </span>
-                  </td>
-                </tr>
-              ))
+                        {(r.evaluation.primaryAssistanceUsed > 0 || r.evaluation.secondRoundAssistanceUsed > 0) && (
+                          <span className="text-[10px] text-amber-400/90 font-mono">
+                            (+{r.evaluation.primaryAssistanceUsed + r.evaluation.secondRoundAssistanceUsed} درجات مساعدة)
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

@@ -148,6 +148,7 @@ export const GradeEntryView: React.FC<GradeEntryViewProps> = ({
         else if (selectedStage === 'midterm' && rec.midtermScore !== null) entered++;
         else if (selectedStage === 'term2' && rec.term2Score !== null) entered++;
         else if (selectedStage === 'final' && rec.finalExamScore !== null) entered++;
+        else if (selectedStage === 'second_round' && rec.secondRoundScore !== null) entered++;
       }
     });
 
@@ -165,7 +166,7 @@ export const GradeEntryView: React.FC<GradeEntryViewProps> = ({
   // Handle grade saving
   const handleSaveGrade = (
     studentId: string,
-    field: 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore',
+    field: 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore' | 'secondRoundScore',
     fieldArabic: string,
     value: number | null
   ) => {
@@ -186,14 +187,17 @@ export const GradeEntryView: React.FC<GradeEntryViewProps> = ({
     if (sectionStudents.length === 0) return;
 
     let headers = ['الرقم', 'اسم الطالب', 'درجة الفصل الأول'];
-    if (selectedStage === 'midterm' || selectedStage === 'term2' || selectedStage === 'final') {
+    if (selectedStage === 'midterm' || selectedStage === 'term2' || selectedStage === 'final' || selectedStage === 'second_round') {
       headers.push('درجة نصف السنة');
     }
-    if (selectedStage === 'term2' || selectedStage === 'final') {
+    if (selectedStage === 'term2' || selectedStage === 'final' || selectedStage === 'second_round') {
       headers.push('درجة الفصل الثاني', 'درجة السعي السنوي');
     }
-    if (selectedStage === 'final') {
+    if (selectedStage === 'final' || selectedStage === 'second_round') {
       headers.push('درجة الامتحان النهائي', 'الدرجة النهائية');
+    }
+    if (selectedStage === 'second_round') {
+      headers.push('درجة الإكمال (الدور الثاني)', 'الدرجة النهائية بعد الإكمال');
     }
 
     const rows = sectionStudents.map((s, idx) => {
@@ -211,19 +215,25 @@ export const GradeEntryView: React.FC<GradeEntryViewProps> = ({
         rec?.term1Score !== null && rec?.term1Score !== undefined ? rec.term1Score.toString() : '',
       ];
 
-      if (selectedStage === 'midterm' || selectedStage === 'term2' || selectedStage === 'final') {
+      if (selectedStage === 'midterm' || selectedStage === 'term2' || selectedStage === 'final' || selectedStage === 'second_round') {
         row.push(rec?.midtermScore !== null && rec?.midtermScore !== undefined ? rec.midtermScore.toString() : '');
       }
-      if (selectedStage === 'term2' || selectedStage === 'final') {
+      if (selectedStage === 'term2' || selectedStage === 'final' || selectedStage === 'second_round') {
         row.push(
           rec?.term2Score !== null && rec?.term2Score !== undefined ? rec.term2Score.toString() : '',
           rec?.termYearlyScore !== null && rec?.termYearlyScore !== undefined ? rec.termYearlyScore.toString() : ''
         );
       }
-      if (selectedStage === 'final') {
+      if (selectedStage === 'final' || selectedStage === 'second_round') {
         row.push(
           rec?.finalExamScore !== null && rec?.finalExamScore !== undefined ? rec.finalExamScore.toString() : '',
           rec?.finalScore !== null && rec?.finalScore !== undefined ? rec.finalScore.toString() : ''
+        );
+      }
+      if (selectedStage === 'second_round') {
+        row.push(
+          rec?.secondRoundScore !== null && rec?.secondRoundScore !== undefined ? rec.secondRoundScore.toString() : '',
+          rec?.secondRoundFinalScore !== null && rec?.secondRoundFinalScore !== undefined ? rec.secondRoundFinalScore.toString() : ''
         );
       }
       return row.join(',');
@@ -473,6 +483,11 @@ export const GradeEntryView: React.FC<GradeEntryViewProps> = ({
         maxScore={activeSubject?.maxScore || 100}
         settings={settings}
         searchQuery={searchQuery}
+        academicYearId={selectedYearId}
+        classId={selectedClassId}
+        sectionId={selectedSectionId}
+        subjectId={selectedSubjectId}
+        classSubjects={availableSubjects}
         onSaveGrade={handleSaveGrade}
       />
     </div>

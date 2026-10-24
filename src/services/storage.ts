@@ -10,6 +10,7 @@ import {
   ExemptionSettings,
   UserAccount,
   CertificateTemplateConfig,
+  AcademicYearDecisionSettings,
 } from '../types';
 import { recalculateGradeRecord } from './calculations';
 import {
@@ -88,6 +89,7 @@ export interface DatabaseState {
   grades: Record<string, GradeRecord>; // key: `${academicYearId}_${classId}_${sectionId}_${subjectId}_${studentId}`
   settings: AppSettings;
   exemptionSettings?: Record<string, ExemptionSettings>; // key: academicYearId
+  decisionSettings?: Record<string, AcademicYearDecisionSettings>; // key: academicYearId
   certificateTemplate?: CertificateTemplateConfig;
   users?: UserAccount[];
   version: string;
@@ -322,6 +324,10 @@ export class LocalStorageEngine {
             parsed.exemptionSettings = {};
           }
 
+          if (!parsed.decisionSettings) {
+            parsed.decisionSettings = {};
+          }
+
           // Ensure default admin exists if no users are found
           let stateNeedsPersist = false;
           if (!parsed.users || !Array.isArray(parsed.users) || parsed.users.length === 0) {
@@ -351,6 +357,7 @@ export class LocalStorageEngine {
       grades: {},
       settings: INITIAL_SETTINGS,
       exemptionSettings: {},
+      decisionSettings: {},
       users: [INITIAL_DEFAULT_ADMIN],
       version: '1.0.0',
       lastBackupDate: new Date().toISOString(),
@@ -404,7 +411,7 @@ export class LocalStorageEngine {
     sectionId: string,
     subjectId: string,
     studentId: string,
-    field: 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore',
+    field: 'term1Score' | 'midtermScore' | 'term2Score' | 'finalExamScore' | 'secondRoundScore',
     fieldArabic: string,
     newValue: number | null,
     reason?: string
@@ -423,6 +430,8 @@ export class LocalStorageEngine {
       termYearlyScore: null,
       finalExamScore: null,
       finalScore: null,
+      secondRoundScore: null,
+      secondRoundFinalScore: null,
       lastUpdated: new Date().toISOString(),
       auditHistory: [],
     };
@@ -434,6 +443,14 @@ export class LocalStorageEngine {
       lastUpdated: new Date().toISOString(),
       auditHistory: existing.auditHistory ? [...existing.auditHistory] : [],
     };
+
+    if (field === 'secondRoundScore') {
+      if (newValue !== null && newValue !== undefined) {
+        updatedRecord.secondRoundDate = new Date().toISOString();
+      } else {
+        updatedRecord.secondRoundDate = undefined;
+      }
+    }
 
     if (oldValue !== newValue) {
       updatedRecord.auditHistory?.push({
@@ -447,12 +464,13 @@ export class LocalStorageEngine {
     }
 
     // Recompute dependent yearly & final scores
-    const { termYearlyScore, finalScore } = recalculateGradeRecord(
+    const { termYearlyScore, finalScore, secondRoundFinalScore } = recalculateGradeRecord(
       updatedRecord,
       this.state.settings.roundingRule
     );
     updatedRecord.termYearlyScore = termYearlyScore;
     updatedRecord.finalScore = finalScore;
+    updatedRecord.secondRoundFinalScore = secondRoundFinalScore;
 
     this.state.grades[key] = updatedRecord;
     this.notify();
@@ -470,6 +488,7 @@ export class LocalStorageEngine {
       const recalculated = recalculateGradeRecord(g, this.state.settings.roundingRule);
       g.termYearlyScore = recalculated.termYearlyScore;
       g.finalScore = recalculated.finalScore;
+      g.secondRoundFinalScore = recalculated.secondRoundFinalScore;
     });
 
     this.notify();
@@ -506,6 +525,72 @@ export class LocalStorageEngine {
       isConfigured: true,
       updatedAt: new Date().toISOString(),
     };
+    this.notify();
+  }
+
+  // --- Administrative Decision Settings (Assistance & Failing Rules) per Academic Year ---
+  public getDefaultDecisionSettings(academicYearId: string): AcademicYearDecisionSettings {
+    return {
+      academicYearId,
+      maxFailedSubjectsAllowed: 4,
+      primaryAssistanceMarks: 10,
+      secondRoundAdditionalAssistanceMarks: 0,
+      notes: 'إعدادات القرار الوزاري المعتمدة',
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  public getDecisionSettings(academicYearId: string): AcademicYearDecisionSettings {
+    if (!this.state.decisionSettings) {
+      this.state.decisionSettings = {};
+    }
+    if (this.state.decisionSettings[academicYearId]) {
+      return this.state.decisionSettings[academicYearId];
+    }
+    return this.getDefaultDecisionSettings(academicYearId);
+  }
+
+  public saveDecisionSettings(settings: AcademicYearDecisionSettings): void {
+    if (!this.state.decisionSettings) {
+      this.state.decisionSettings = {};
+    }
+    this.state.decisionSettings[settings.academicYearId] = {
+      ...settings,
+      maxFailedSubjectsAllowed: Math.max(1, Math.floor(settings.maxFailedSubjectsAllowed || 4)),
+      primaryAssistanceMarks: Math.max(0, Math.floor(settings.primaryAssistanceMarks || 0)),
+      secondRoundAdditionalAssistanceMarks: Math.max(0, Math.floor(settings.secondRoundAdditionalAssistanceMarks || 0)),
+      updatedAt: new Date().toISOString(),
+    };
+    this.notify();
+  }
+
+  // --- Student Exemption Management ---
+  public setStudentGeneralExempt(studentId: string, isExempt: boolean): void {
+    const student = this.state.students.find((s) => s.id === studentId);
+    if (!student) return;
+    student.isGeneralExempt = isExempt;
+    this.notify();
+  }
+
+  public toggleStudentSubjectIndividualExempt(studentId: string, subjectId: string, isExempt?: boolean): void {
+    const student = this.state.students.find((s) => s.id === studentId);
+    if (!student) return;
+    const current = new Set(student.individualExemptions || []);
+    const shouldExempt = isExempt !== undefined ? isExempt : !current.has(subjectId);
+    if (shouldExempt) {
+      current.add(subjectId);
+    } else {
+      current.delete(subjectId);
+    }
+    student.individualExemptions = Array.from(current);
+
+    // Also sync the GradeRecord if it exists
+    Object.values(this.state.grades).forEach((g) => {
+      if (g.studentId === studentId && g.subjectId === subjectId) {
+        g.isIndividualExempt = shouldExempt;
+      }
+    });
+
     this.notify();
   }
 

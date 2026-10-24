@@ -1,6 +1,6 @@
 import React from 'react';
 import { GradeStage } from '../../types';
-import { CalendarDays, Award, BookOpenCheck, GraduationCap } from 'lucide-react';
+import { CalendarDays, Award, BookOpenCheck, GraduationCap, RotateCcw } from 'lucide-react';
 
 interface StageSelectorProps {
   currentStage: GradeStage;
@@ -47,6 +47,14 @@ export const STAGES_CONFIG: {
     icon: GraduationCap,
     badgeColor: 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10',
   },
+  {
+    id: 'second_round',
+    title: 'امتحان الدور الثاني (الإكمال)',
+    order: 5,
+    description: 'إدخال درجة الإكمال للطلاب المكمّلين وحساب الدرجة النهائية بعد الإكمال',
+    icon: RotateCcw,
+    badgeColor: 'border-purple-500/50 text-purple-400 bg-purple-500/10',
+  },
 ];
 
 export const StageSelector: React.FC<StageSelectorProps> = ({
@@ -62,7 +70,7 @@ export const StageSelector: React.FC<StageSelectorProps> = ({
         </label>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         {STAGES_CONFIG.map((stage) => {
           const isSelected = currentStage === stage.id;
           const Icon = stage.icon;

@@ -310,6 +310,7 @@ export default function App() {
               settings={dbState.settings}
               currentUserId={authSession.user.id}
               userRole={authSession.user.role}
+              currentAcademicYearId={currentYear?.id}
             />
           )}
         </main>

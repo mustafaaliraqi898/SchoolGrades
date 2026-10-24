@@ -18,6 +18,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { UserManagementSection } from './UserManagementSection';
+import { AdminDecisionSettingsSection } from './AdminDecisionSettingsSection';
 import { processLogoFile } from '../../utils/imageUtils';
 import { SchoolLogo } from '../Common/SchoolLogo';
 
@@ -25,12 +26,14 @@ interface SettingsViewProps {
   settings: AppSettings;
   currentUserId?: string;
   userRole?: UserRole;
+  currentAcademicYearId?: string;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
   currentUserId,
   userRole = 'admin',
+  currentAcademicYearId,
 }) => {
   const [formData, setFormData] = useState<AppSettings>(settings);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -577,6 +580,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </button>
         </div>
       </form>
+
+      {/* Administrative Decision Settings (Assistance & Failing Rules per Academic Year) */}
+      <AdminDecisionSettingsSection currentAcademicYearId={currentAcademicYearId} />
 
       {/* 4. User Accounts & Access Control (Admin-Only Section) */}
       {userRole === 'admin' && (
