@@ -59,6 +59,12 @@ export const ADDITIONAL_DEMO_STUDENTS: Student[] = [
   { id: 'stu-5b-204', registrationNumber: '2004', fatherPhone: '0770234504', seatNumber: 4, name: 'حارث مؤيد سليم الطائي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-b', gender: 'male' },
   { id: 'stu-5b-205', registrationNumber: '2005', fatherPhone: '0770234505', seatNumber: 5, name: 'دانيال نزار رفيق الشمري', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-b', gender: 'male' },
 
+  // 5th Science - Section C (الشعبة ج)
+  { id: 'stu-5c-251', registrationNumber: '2501', fatherPhone: '0770254501', seatNumber: 1, name: 'فاروق عمر عبد القادر الحديثي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-c', gender: 'male' },
+  { id: 'stu-5c-252', registrationNumber: '2502', fatherPhone: '0770254502', seatNumber: 2, name: 'أحمد طارق خليل الراوي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-c', gender: 'male' },
+  { id: 'stu-5c-253', registrationNumber: '2503', fatherPhone: '0770254503', seatNumber: 3, name: 'ليث عماد صائب الجبوري', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-c', gender: 'male' },
+  { id: 'stu-5c-254', registrationNumber: '2504', fatherPhone: '0770254504', seatNumber: 4, name: 'حيدر عدي فاضل الكلابي', academicYearId: 'ay-2026-2027', classId: 'cls-5-sci', sectionId: 'sec-5sci-c', gender: 'male' },
+
   // 6th Science - Section A
   { id: 'stu-6a-301', registrationNumber: '3001', fatherPhone: '0770334501', seatNumber: 1, name: 'مصطفى كمال الدين الجبوري', academicYearId: 'ay-2026-2027', classId: 'cls-6-sci', sectionId: 'sec-6sci-a', gender: 'male' },
   { id: 'stu-6a-302', registrationNumber: '3002', fatherPhone: '0770334502', seatNumber: 2, name: 'همام عبد الرحمن الزهيري', academicYearId: 'ay-2026-2027', classId: 'cls-6-sci', sectionId: 'sec-6sci-a', gender: 'male' },
@@ -259,6 +265,11 @@ export function completeDemoSeedData(state: DatabaseState): {
       newStudentsCount++;
     }
   });
+
+  // Ensure 5th Science has section C (الشعبة ج) for 3-section demonstration
+  if (!state.sections.some((s) => s.id === 'sec-5sci-c')) {
+    state.sections.push({ id: 'sec-5sci-c', classId: 'cls-5-sci', name: 'ج' });
+  }
 
   // Ensure default Exemption Settings exist for all academic years
   if (!state.exemptionSettings) {

@@ -89,23 +89,112 @@ html.light {
 }
 
 /* =========================================================================
-   Print styling for certificates and grade sheets
+   Print styling for certificates, official ledgers and grade sheets
    ========================================================================= */
 @media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  *,
+  *::before,
+  *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    box-sizing: border-box !important;
+  }
+
+  html,
   body {
-    background: white !important;
-    color: black !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 10pt;
   }
-  .no-print {
+
+  /* Force hide all screen controls, sidebars, headers, floating widgets */
+  .no-print,
+  .no-print *,
+  header.no-print,
+  aside.no-print,
+  nav.no-print {
     display: none !important;
+    height: 0 !important;
+    width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    visibility: hidden !important;
   }
+
   .print-only {
     display: block !important;
+    visibility: visible !important;
   }
+
   .printable-card {
     box-shadow: none !important;
-    border: 1px solid #cbd5e1 !important;
+    border: 1px solid #000000 !important;
     page-break-inside: avoid;
+  }
+
+  /* Dedicated Results Ledger Print Sheet */
+  .printable-results-document {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    overflow: visible !important;
+  }
+
+  table.results-print-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    border: 1.5px solid #000000 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    page-break-inside: auto !important;
+    font-size: 9.5pt !important;
+  }
+
+  table.results-print-table thead {
+    display: table-header-group !important;
+  }
+
+  table.results-print-table tfoot {
+    display: table-footer-group !important;
+  }
+
+  table.results-print-table tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  table.results-print-table th {
+    background-color: #f1f5f9 !important;
+    color: #000000 !important;
+    border: 1px solid #1e293b !important;
+    font-weight: 800 !important;
+    text-align: center !important;
+    padding: 5px 4px !important;
+  }
+
+  table.results-print-table td {
+    border: 1px solid #334155 !important;
+    color: #000000 !important;
+    padding: 4px 6px !important;
+  }
+
+  .print-signatures-block {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 }
 

@@ -37,7 +37,11 @@ import {
   Database,
   ChevronDown,
   ChevronUp,
+  Download,
+  FileText,
 } from 'lucide-react';
+import { ReportHeader } from '../Common/ReportHeader';
+import { ExportCertificatesPdfModal } from './ExportCertificatesPdfModal';
 
 interface ExemptionViewProps {
   academicYears: AcademicYear[];
@@ -112,6 +116,10 @@ export const ExemptionView: React.FC<ExemptionViewProps> = ({
       )
       .sort((a, b) => a.seatNumber - b.seatNumber);
   }, [students, selectedYearId, selectedClassId, selectedSectionId]);
+
+  const activeYear = academicYears.find((y) => y.id === selectedYearId);
+  const activeClass = classes.find((c) => c.id === selectedClassId);
+  const activeSection = sections.find((s) => s.id === selectedSectionId);
 
   // 2. Exemption Settings State (Tied strictly to selectedYearId)
   const savedSettings = useMemo(() => {
@@ -221,6 +229,53 @@ export const ExemptionView: React.FC<ExemptionViewProps> = ({
         (r.student.registrationNumber && r.student.registrationNumber.includes(q))
     );
   }, [evaluatedResults, showNearEligible, searchQuery]);
+
+  // Students strictly eligible for General Exemption ('معفى عام') in current active selection
+  const strictlyGeneralExemptStudents = useMemo(() => {
+    return evaluatedResults
+      .filter((r) => r.status === 'معفى عام')
+      .map((r) => r.student);
+  }, [evaluatedResults]);
+
+  // Certificate selection & modal states
+  const [selectedForCertificateIds, setSelectedForCertificateIds] = useState<string[]>([]);
+  const [isExportPdfModalOpen, setIsExportPdfModalOpen] = useState(false);
+  const [noStudentSelectedNotice, setNoStudentSelectedNotice] = useState<string | null>(null);
+
+  // Auto-select all eligible students whenever active class/section/evaluation changes
+  useEffect(() => {
+    setSelectedForCertificateIds(strictlyGeneralExemptStudents.map((s) => s.id));
+  }, [strictlyGeneralExemptStudents]);
+
+  const toggleStudentForCertificate = (studentId: string) => {
+    setSelectedForCertificateIds((prev) =>
+      prev.includes(studentId)
+        ? prev.filter((id) => id !== studentId)
+        : [...prev, studentId]
+    );
+  };
+
+  const toggleSelectAllForCertificates = () => {
+    if (selectedForCertificateIds.length === strictlyGeneralExemptStudents.length) {
+      setSelectedForCertificateIds([]);
+    } else {
+      setSelectedForCertificateIds(strictlyGeneralExemptStudents.map((s) => s.id));
+    }
+  };
+
+  const handleOpenExportCertificates = () => {
+    if (selectedForCertificateIds.length === 0) {
+      setNoStudentSelectedNotice(
+        strictlyGeneralExemptStudents.length === 0
+          ? 'لا يوجد طلبة معفون عاماً في هذا الصف والشعبة حالياً لإصدار شهادات لهم.'
+          : 'يرجى تحديد طالب واحد على الأقل من قائمة الطلبة المعفين عاماً لتصدير شهاداتهم.'
+      );
+      setTimeout(() => setNoStudentSelectedNotice(null), 5000);
+      return;
+    }
+    setNoStudentSelectedNotice(null);
+    setIsExportPdfModalOpen(true);
+  };
 
   // Individual Exemption Eligible Students Grouping:
   // Rules:
@@ -332,8 +387,24 @@ export const ExemptionView: React.FC<ExemptionViewProps> = ({
 
   return (
     <div className="space-y-6 pb-12" dir="rtl">
+      {/* Printable Official Header with School Logo (Visible ONLY during print) */}
+      <div className="hidden print:block text-black bg-white">
+        <ReportHeader
+          settings={settings}
+          title={
+            activeTab === 'general'
+              ? `كشف الطلبة المشمولين بالإعفاء العام — ${activeClass?.name || ''} (شعبة ${activeSection?.name || ''})`
+              : `كشف الطلبة المشمولين بالإعفاء الفردي — ${activeClass?.name || ''} (شعبة ${activeSection?.name || ''})`
+          }
+          subTitle={`استناداً إلى درجات السعي السنوي • العام الدراسي: ${activeYear?.name || ''}`}
+          academicYearName={activeYear?.name}
+          classNameStr={activeClass?.name}
+          sectionNameStr={activeSection?.name}
+        />
+      </div>
+
       {/* 1. Header Bar */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="no-print bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center text-slate-950 shadow-lg shadow-amber-500/20">
@@ -929,8 +1000,25 @@ export const ExemptionView: React.FC<ExemptionViewProps> = ({
               </p>
             </div>
 
-            {/* Toggle Button for Near-Eligible Students */}
-            <div className="flex items-center gap-2.5 w-full md:w-auto justify-end">
+            {/* Actions: Export PDF & Toggle Near-Eligible */}
+            <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto justify-end">
+              {/* Export PDF Button */}
+              <button
+                type="button"
+                onClick={handleOpenExportCertificates}
+                className="px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-md shadow-amber-500/20 active:scale-95"
+                title="تصدير شهادات شكر وتقدير للإعفاء العام بصيغة PDF للطلبة المحددين"
+              >
+                <FileText className="w-4 h-4 stroke-[2.5]" />
+                <span>تصدير الشهادات PDF</span>
+                {strictlyGeneralExemptStudents.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-slate-950/25 text-slate-950">
+                    {selectedForCertificateIds.length} / {strictlyGeneralExemptStudents.length}
+                  </span>
+                )}
+              </button>
+
+              {/* Toggle Button for Near-Eligible Students */}
               <button
                 type="button"
                 onClick={() => setShowNearEligible(!showNearEligible)}
@@ -976,10 +1064,44 @@ export const ExemptionView: React.FC<ExemptionViewProps> = ({
             </div>
           )}
 
+          {/* Notification when trying to export with 0 students selected */}
+          {noStudentSelectedNotice && (
+            <div className="bg-rose-500/15 border-b border-rose-500/30 px-5 py-3 text-xs sm:text-sm text-rose-200 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span className="font-semibold">{noStudentSelectedNotice}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNoStudentSelectedNotice(null)}
+                className="text-rose-400 hover:text-rose-200 p-1"
+                aria-label="إغلاق"
+              >
+                <XCircle className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full text-right text-xs sm:text-sm border-collapse min-w-[760px]">
               <thead>
                 <tr className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-semibold">
+                  <th className="py-3 px-3 text-center w-12">
+                    {strictlyGeneralExemptStudents.length > 0 && (
+                      <div className="flex items-center justify-center">
+                        <input
+                          type="checkbox"
+                          checked={
+                            strictlyGeneralExemptStudents.length > 0 &&
+                            selectedForCertificateIds.length === strictlyGeneralExemptStudents.length
+                          }
+                          onChange={toggleSelectAllForCertificates}
+                          title="تحديد أو إلغاء تحديد جميع الطلبة المعفين عاماً لتصدير شهاداتهم"
+                          className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500/30 bg-slate-800 border-slate-600 cursor-pointer accent-amber-500"
+                        />
+                      </div>
+                    )}
+                  </th>
                   <th className="py-3 px-3 text-center w-14">التسلسل</th>
                   <th className="py-3 px-4">اسم الطالب</th>
                   <th className="py-3 px-3 text-center">المعدل العام</th>
@@ -991,7 +1113,7 @@ export const ExemptionView: React.FC<ExemptionViewProps> = ({
               <tbody className="divide-y divide-slate-800/60">
                 {filteredGeneralResults.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-12 text-center text-slate-500">
+                    <td colSpan={7} className="py-12 text-center text-slate-500">
                       {searchQuery
                         ? 'لا توجد نتائج مطابقة لبحثك'
                         : 'لا يوجد طلبة مستحقون للإعفاء العام في هذا الصف والشعبة حالياً'}
@@ -1001,18 +1123,38 @@ export const ExemptionView: React.FC<ExemptionViewProps> = ({
                   filteredGeneralResults.map((row, idx) => {
                     const isExempt = row.status === 'معفى عام';
                     const isNear = row.isNearEligible && !isExempt;
+                    const isSelected = selectedForCertificateIds.includes(row.student.id);
 
                     return (
                       <tr
                         key={row.student.id}
                         className={`transition-colors ${
                           isExempt
-                            ? 'bg-amber-500/5 hover:bg-amber-500/10'
+                            ? isSelected
+                              ? 'bg-amber-500/10 hover:bg-amber-500/15'
+                              : 'bg-amber-500/5 hover:bg-amber-500/10'
                             : isNear
                             ? 'bg-amber-500/10 hover:bg-amber-500/15 border-r-2 border-r-amber-400'
                             : 'hover:bg-slate-800/40'
                         }`}
                       >
+                        {/* 0. تحديد لإصدار الشهادة */}
+                        <td className="py-3 px-3 text-center">
+                          {isExempt ? (
+                            <div className="flex items-center justify-center">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleStudentForCertificate(row.student.id)}
+                                title={`تحديد ${row.student.name} لإصدار شهادة الإعفاء`}
+                                className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500/30 bg-slate-800 border-slate-600 cursor-pointer accent-amber-500"
+                              />
+                            </div>
+                          ) : (
+                            <span className="text-slate-600 text-xs">—</span>
+                          )}
+                        </td>
+
                         {/* 1. التسلسل */}
                         <td className="py-3 px-3 text-center font-mono text-slate-400">
                           {idx + 1}
@@ -1274,6 +1416,22 @@ export const ExemptionView: React.FC<ExemptionViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* 8. Export Certificates Multi-page PDF Modal */}
+      {isExportPdfModalOpen && (
+        <ExportCertificatesPdfModal
+          isOpen={isExportPdfModalOpen}
+          onClose={() => setIsExportPdfModalOpen(false)}
+          eligibleStudents={strictlyGeneralExemptStudents}
+          initialSelectedStudentIds={selectedForCertificateIds}
+          settings={settings}
+          templateConfig={db.getCertificateTemplate()}
+          academicYearName={activeYear?.name || ''}
+          classNameStr={activeClass?.name || ''}
+          sectionNameStr={activeSection?.name || ''}
+        />
+      )}
     </div>
   );
 };
+

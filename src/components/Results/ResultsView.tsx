@@ -26,7 +26,11 @@ import {
   Layers,
   Sparkles,
   Info,
+  Eye,
+  X,
+  School,
 } from 'lucide-react';
+import { SchoolLogo } from '../Common/SchoolLogo';
 
 interface ResultsViewProps {
   academicYears: AcademicYear[];
@@ -116,6 +120,10 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
   // Search Query Filter
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Print execution & preview states
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
 
   // Subjects sorted strictly by order
   const classSubjects = useMemo(
@@ -318,22 +326,216 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     );
   };
 
-  return (
-    <div className="flex flex-col gap-6 pb-16" dir="rtl">
-      {/* Printable Header (Visible only when printing) */}
-      <div className="hidden print:block text-center border-b-2 border-slate-900 pb-4 mb-4">
-        <h1 className="text-xl font-bold text-black">{settings.schoolName || 'جمهورية العراق - وزارة التربية'}</h1>
-        <h2 className="text-lg font-black text-black mt-1">
-          كشف نتائج الطلاب — {activeGradeConfig.label}
-        </h2>
-        <div className="flex justify-center gap-6 text-xs text-slate-700 mt-2 font-bold">
-          <span>العام الدراسي: {activeYear?.name}</span>
-          <span>الصف: {activeClass?.name}</span>
-          <span>الشعبة: {activeSection?.name}</span>
-          <span>تاريخ الطباعة: {new Date().toLocaleDateString('ar-EG')}</span>
+  // Robust print execution with DOM stabilization and focus
+  const handlePrint = () => {
+    setIsPrinting(true);
+    setTimeout(() => {
+      try {
+        window.focus();
+        window.print();
+      } catch (err) {
+        console.error('Print dialog failed to open:', err);
+      } finally {
+        setIsPrinting(false);
+      }
+    }, 180);
+  };
+
+  // Shared Printable Content Component (used for print media & print preview modal)
+  const renderPrintableContent = () => (
+    <div className="printable-results-document w-full text-black bg-white select-text" dir="rtl">
+      {/* Official Header */}
+      <div className="border-b-2 border-black pb-3 mb-3">
+        <div className="flex items-start justify-between">
+          {/* Right: Ministry & Directorate */}
+          <div className="text-right text-xs leading-relaxed">
+            <div className="font-bold">جمهورية العراق</div>
+            <div className="font-bold">وزارة التربية والتعليم</div>
+            <div className="text-slate-700">{settings.city || 'المديرية العامة للتربية'}</div>
+          </div>
+
+          {/* Center: School Name, Logo & Report Title */}
+          <div className="flex flex-col items-center text-center">
+            {settings.schoolLogo ? (
+              <div className="mb-1 flex items-center justify-center">
+                <SchoolLogo
+                  logoUrl={settings.schoolLogo}
+                  schoolName={settings.schoolName}
+                  size="md"
+                  className="max-h-14 max-w-[120px]"
+                />
+              </div>
+            ) : null}
+            <div className="flex items-center justify-center gap-1.5 mb-1">
+              {!settings.schoolLogo && <School className="w-5 h-5 text-black" />}
+              <h2 className="text-lg font-black tracking-tight text-black">
+                {settings.schoolName || 'مدرسة المتفوقين للبنين'}
+              </h2>
+            </div>
+            <h1 className="text-base font-black text-slate-900 px-4 py-1 border border-black/40 rounded-lg bg-slate-100/90 shadow-2xs">
+              كشف نتائج وتدقيق درجات الطلاب — {activeGradeConfig.label}
+            </h1>
+            <div className="text-[11px] font-bold text-slate-600 mt-1">
+              {activeGradeConfig.description}
+            </div>
+          </div>
+
+          {/* Left: Meta details */}
+          <div className="text-left text-xs leading-relaxed font-mono">
+            <div><strong className="font-sans">العام: </strong>{activeYear?.name || '—'}</div>
+            <div><strong className="font-sans">الصف: </strong>{activeClass?.name || '—'}</div>
+            <div><strong className="font-sans">الشعبة: </strong>{activeSection?.name ? `شعبة ${activeSection.name}` : '—'}</div>
+            <div><strong className="font-sans">تاريخ الطباعة: </strong>{new Date().toLocaleDateString('ar-EG')}</div>
+          </div>
+        </div>
+
+        {/* Statistical Summary Bar */}
+        <div className="mt-3 pt-2 border-t border-slate-300 flex items-center justify-between text-[11px] font-bold px-3 py-1.5 bg-slate-50 border border-slate-300 rounded">
+          <span>عدد طلاب القائمة: <strong className="font-mono text-black">{filteredResults.length}</strong></span>
+          <span>الناجحون: <strong className="font-mono text-emerald-700">{classStats.passed}</strong></span>
+          <span>المكملون: <strong className="font-mono text-amber-700">{classStats.supplementary}</strong></span>
+          <span>الراسبون: <strong className="font-mono text-rose-700">{classStats.failed}</strong></span>
+          <span>غير مكتمل: <strong className="font-mono text-slate-700">{classStats.incomplete}</strong></span>
+          <span>نسبة النجاح: <strong className="font-mono text-emerald-800">{classStats.passRate}%</strong></span>
+          <span>أعلى معدل: <strong className="font-mono text-black">{classStats.highestAvg !== null ? `${classStats.highestAvg}%` : '—'}</strong></span>
         </div>
       </div>
 
+      {/* Official Table */}
+      <table className="results-print-table w-full border-collapse border border-black text-[11px]">
+        <thead>
+          <tr className="bg-slate-100">
+            <th className="border border-black p-1.5 text-center font-bold text-black" style={{ width: '34px' }}>ت</th>
+            <th className="border border-black p-1.5 text-center font-bold text-black font-mono" style={{ width: '70px' }}>رقم القيد</th>
+            <th className="border border-black p-1.5 text-right font-bold text-black pr-2" style={{ minWidth: '170px' }}>اسم الطالب الثلاثي / الرباعي</th>
+            {classSubjects.map((sub) => (
+              <th key={sub.id} className="border border-black p-1 text-center font-bold text-black" style={{ minWidth: '55px' }}>
+                <div className="font-bold text-[10.5px] leading-tight">{sub.name}</div>
+                <div className="text-[9px] font-normal text-slate-600 font-mono mt-0.5">
+                  ({sub.maxScore}/{sub.passScore})
+                </div>
+              </th>
+            ))}
+            <th className="border border-black p-1.5 text-center font-bold text-black font-mono" style={{ width: '55px' }}>المجموع</th>
+            <th className="border border-black p-1.5 text-center font-bold text-black font-mono" style={{ width: '55px' }}>المعدل</th>
+            <th className="border border-black p-1.5 text-center font-bold text-black" style={{ width: '65px' }}>النتيجة</th>
+            <th className="border border-black p-1.5 text-center font-bold text-black" style={{ width: '80px' }}>الملاحظات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredResults.length === 0 ? (
+            <tr>
+              <td colSpan={classSubjects.length + 5} className="py-8 text-center text-slate-500 font-bold">
+                لا توجد نتائج مسجلة مطابقة للاختيارات الحالية.
+              </td>
+            </tr>
+          ) : (
+            filteredResults.map((r, idx) => (
+              <tr key={r.student.id} className={idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}>
+                <td className="border border-black p-1 text-center font-mono font-bold text-xs">{idx + 1}</td>
+                <td className="border border-black p-1 text-center font-mono text-xs text-slate-800">
+                  {r.student.registrationNumber || r.student.seatNumber || '—'}
+                </td>
+                <td className="border border-black p-1 pr-2 text-right font-bold text-xs text-black">
+                  {r.student.name}
+                </td>
+                {classSubjects.map((sub) => {
+                  const score = r.subjectScores[sub.id];
+                  const isNull = score === null || score === undefined || isNaN(score);
+                  const isPass = !isNull && score >= sub.passScore;
+                  return (
+                    <td
+                      key={sub.id}
+                      className={`border border-black p-1 text-center font-mono text-xs ${
+                        isNull
+                          ? 'text-slate-400'
+                          : isPass
+                          ? 'font-medium text-black'
+                          : 'font-black text-rose-700 bg-rose-50/90'
+                      }`}
+                    >
+                      {isNull ? '—' : score}
+                    </td>
+                  );
+                })}
+                <td className="border border-black p-1 text-center font-mono font-bold text-xs bg-slate-50">
+                  {r.isComplete ? r.totalScore : r.countedSubjects > 0 ? `${r.totalScore}*` : '—'}
+                </td>
+                <td className="border border-black p-1 text-center font-mono font-bold text-xs bg-slate-50">
+                  {r.average !== null ? `${r.average}%` : '—'}
+                </td>
+                <td className="border border-black p-1 text-center font-bold text-xs">
+                  <span
+                    className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-black ${
+                      r.status === 'ناجح'
+                        ? 'text-emerald-800 bg-emerald-50 border border-emerald-300'
+                        : r.status === 'مكمل'
+                        ? 'text-amber-800 bg-amber-50 border border-amber-300'
+                        : r.status === 'راسب'
+                        ? 'text-rose-800 bg-rose-50 border border-rose-300'
+                        : 'text-slate-600 bg-slate-100'
+                    }`}
+                  >
+                    {r.status}
+                  </span>
+                </td>
+                <td className="border border-black p-1 text-center text-[10px] text-slate-700">
+                  {r.status === 'مكمل'
+                    ? `إكمال (${r.failedSubjectsCount})`
+                    : r.status === 'راسب'
+                    ? `راسب (${r.failedSubjectsCount})`
+                    : !r.isComplete
+                    ? 'غير مكتمل'
+                    : '—'}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+
+      {/* Official Signatures Block */}
+      <div className="print-signatures-block mt-6 pt-4 border-t-2 border-black">
+        <div className="grid grid-cols-4 gap-4 text-center text-xs">
+          <div className="flex flex-col items-center">
+            <span className="font-bold text-slate-800">منظم القوائم</span>
+            <span className="text-[11px] text-slate-600 mt-0.5">عضو اللجنة الامتحانية</span>
+            <div className="mt-8 border-b border-dotted border-black w-32" />
+            <span className="text-[10px] text-slate-500 mt-1">التوقيع والتاريخ</span>
+          </div>
+
+          <div className="flex flex-col items-center">
+            <span className="font-bold text-slate-800">مدقق الدرجات</span>
+            <span className="text-[11px] text-slate-600 mt-0.5">لجنة التدقيق المركزية</span>
+            <div className="mt-8 border-b border-dotted border-black w-32" />
+            <span className="text-[10px] text-slate-500 mt-1">التوقيع والتاريخ</span>
+          </div>
+
+          <div className="flex flex-col items-center">
+            <span className="font-bold text-slate-800">رئيس اللجنة الامتحانية</span>
+            <span className="text-[11px] text-slate-900 font-bold mt-0.5">{settings.examCommitteeHead || '........................'}</span>
+            <div className="mt-8 border-b border-dotted border-black w-32" />
+            <span className="text-[10px] text-slate-500 mt-1">التوقيع</span>
+          </div>
+
+          <div className="flex flex-col items-center">
+            <span className="font-bold text-slate-800">مدير المدرسة</span>
+            <span className="text-[11px] text-slate-900 font-bold mt-0.5">{settings.directorName || '........................'}</span>
+            <div className="mt-8 border-b border-dotted border-black w-32" />
+            <span className="text-[10px] text-slate-500 mt-1">التوقيع والختم الرسمي</span>
+          </div>
+        </div>
+
+        <div className="text-center text-[9px] text-slate-500 mt-4 pt-2 border-t border-slate-200 flex justify-between">
+          <span>نظام إدارة الدرجات المدرسية — كشف درجات رسمي معتمد</span>
+          <span>تاريخ الطباعة: {new Date().toLocaleString('ar-EG')}</span>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-6 pb-16" dir="rtl">
       {/* Main Header & Filter Control Bar */}
       <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl flex flex-col gap-4 no-print">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800">
@@ -356,8 +558,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
             </p>
           </div>
 
-          {/* Action Buttons: Export Excel & Print */}
-          <div className="flex items-center gap-2.5 self-start lg:self-auto">
+          {/* Action Buttons: Export Excel, Print Preview & Print */}
+          <div className="flex items-center gap-2.5 self-start lg:self-auto flex-wrap">
             <button
               type="button"
               onClick={handleExportExcel}
@@ -370,12 +572,27 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
             <button
               type="button"
-              onClick={() => window.print()}
-              className="h-10 px-4 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-600/20 transition-colors"
-              title="طباعة النتائج المعروضة حالياً"
+              onClick={() => setShowPrintPreview(true)}
+              className="h-10 px-3.5 text-xs font-bold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-2 cursor-pointer transition-colors"
+              title="معاينة شكل ورقة الطباعة A4 على الشاشة قبل الطباعة"
             >
-              <Printer className="w-4 h-4" />
-              <span>طباعة النتائج</span>
+              <Eye className="w-4 h-4 text-blue-400" />
+              <span>معاينة الطباعة</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isPrinting}
+              onClick={handlePrint}
+              className="h-10 px-4 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-600/20 transition-colors disabled:opacity-50"
+              title="طباعة النتائج المعروضة حالياً على ورق A4"
+            >
+              {isPrinting ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Printer className="w-4 h-4" />
+              )}
+              <span>{isPrinting ? 'جاري التجهيز...' : 'طباعة النتائج'}</span>
             </button>
           </div>
         </div>
@@ -565,7 +782,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
       </div>
 
       {/* Complete Student Ledger Table */}
-      <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-950 shadow-2xl">
+      <div className="no-print overflow-x-auto rounded-2xl border border-slate-800 bg-slate-950 shadow-2xl">
         <table className="w-full border-collapse text-right select-none">
           <thead>
             <tr className="bg-slate-900 border-b border-slate-700 text-xs font-bold text-slate-300">
@@ -687,6 +904,61 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
           <span>المجموع والمعدل يُحسبان بصورة نهائية فور اكتمال رصد جميع المواد لهذا النوع من الدرجات.</span>
         </div>
       </div>
+
+      {/* Dedicated Printable Document Container (Visible ONLY during print) */}
+      <div className="hidden print:block">
+        {renderPrintableContent()}
+      </div>
+
+      {/* Interactive Print Preview Modal */}
+      {showPrintPreview && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-sm" dir="rtl">
+          <div className="w-full max-w-6xl max-h-[92vh] flex flex-col bg-slate-900 border border-slate-750 rounded-2xl shadow-2xl overflow-hidden text-white">
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                  <Printer className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm">معاينة كشف النتائج للطباعة (ورق A4 أفقي)</h3>
+                  <p className="text-[11px] text-slate-400">
+                    هكذا ستظهر صفحة الطباعة على ورق A4 مع كامل الترويسة والدرجات والتواقيع
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isPrinting}
+                  onClick={handlePrint}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer shadow-md shadow-emerald-600/20 disabled:opacity-50"
+                >
+                  {isPrinting ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Printer className="w-4 h-4" />
+                  )}
+                  <span>طباعة الآن</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPrintPreview(false)}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto p-4 sm:p-6 bg-slate-950/60 flex justify-center">
+              <div className="bg-white text-slate-950 p-6 sm:p-8 rounded-lg shadow-xl w-full max-w-5xl border border-slate-300 font-sans">
+                {renderPrintableContent()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

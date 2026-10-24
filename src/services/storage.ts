@@ -9,6 +9,7 @@ import {
   GradeStage,
   ExemptionSettings,
   UserAccount,
+  CertificateTemplateConfig,
 } from '../types';
 import { recalculateGradeRecord } from './calculations';
 import {
@@ -30,6 +31,54 @@ export const INITIAL_DEFAULT_ADMIN: UserAccount = {
   createdAt: '2026-09-01T08:00:00.000Z',
 };
 
+export const DEFAULT_CERTIFICATE_CONFIG: CertificateTemplateConfig = {
+  templateImage: undefined,
+  elements: {
+    officialLogo: {
+      x: 87,
+      y: 13,
+      width: 10,
+      visible: true,
+    },
+    kuficLogo: {
+      x: 13,
+      y: 13,
+      width: 10,
+      visible: true,
+    },
+    studentName: {
+      x: 50,
+      y: 53,
+      fontSize: 34,
+      fontWeight: 'bold',
+      fontColor: '#0f172a',
+      fontFamily: 'Cairo',
+      textAlign: 'center',
+      visible: true,
+    },
+    academicYear: {
+      x: 78,
+      y: 84,
+      fontSize: 16,
+      fontWeight: 'bold',
+      fontColor: '#334155',
+      fontFamily: 'Tajawal',
+      textAlign: 'center',
+      visible: true,
+    },
+    directorName: {
+      x: 22,
+      y: 84,
+      fontSize: 18,
+      fontWeight: 'bold',
+      fontColor: '#1e293b',
+      fontFamily: 'Tajawal',
+      textAlign: 'center',
+      visible: true,
+    },
+  },
+};
+
 export interface DatabaseState {
   academicYears: AcademicYear[];
   classes: SchoolClass[];
@@ -39,6 +88,7 @@ export interface DatabaseState {
   grades: Record<string, GradeRecord>; // key: `${academicYearId}_${classId}_${sectionId}_${subjectId}_${studentId}`
   settings: AppSettings;
   exemptionSettings?: Record<string, ExemptionSettings>; // key: academicYearId
+  certificateTemplate?: CertificateTemplateConfig;
   users?: UserAccount[];
   version: string;
   lastBackupDate?: string;
@@ -60,6 +110,7 @@ const INITIAL_CLASSES: SchoolClass[] = [
 const INITIAL_SECTIONS: Section[] = [
   { id: 'sec-5sci-a', classId: 'cls-5-sci', name: 'أ' },
   { id: 'sec-5sci-b', classId: 'cls-5-sci', name: 'ب' },
+  { id: 'sec-5sci-c', classId: 'cls-5-sci', name: 'ج' },
   { id: 'sec-6sci-a', classId: 'cls-6-sci', name: 'أ' },
   { id: 'sec-6sci-b', classId: 'cls-6-sci', name: 'ب' },
   { id: 'sec-4sci-a', classId: 'cls-4-sci', name: 'أ' },
@@ -456,6 +507,34 @@ export class LocalStorageEngine {
       updatedAt: new Date().toISOString(),
     };
     this.notify();
+  }
+
+  // --- Certificate Template Designer Operations ---
+  public getCertificateTemplate(): CertificateTemplateConfig {
+    if (!this.state.certificateTemplate) {
+      this.state.certificateTemplate = JSON.parse(JSON.stringify(DEFAULT_CERTIFICATE_CONFIG));
+    }
+    return this.state.certificateTemplate || DEFAULT_CERTIFICATE_CONFIG;
+  }
+
+  public saveCertificateTemplate(config: CertificateTemplateConfig): void {
+    this.state.certificateTemplate = {
+      ...config,
+      lastUpdated: new Date().toISOString(),
+    };
+    this.notify();
+  }
+
+  public resetCertificateTemplate(): CertificateTemplateConfig {
+    const currentTemplateImage = this.state.certificateTemplate?.templateImage;
+    const fresh: CertificateTemplateConfig = {
+      ...JSON.parse(JSON.stringify(DEFAULT_CERTIFICATE_CONFIG)),
+      templateImage: currentTemplateImage, // Keep uploaded template image on layout reset
+      lastUpdated: new Date().toISOString(),
+    };
+    this.state.certificateTemplate = fresh;
+    this.notify();
+    return fresh;
   }
 
   // --- Entities Management ---
@@ -1159,6 +1238,24 @@ export class LocalStorageEngine {
       const ll = u.lastLogin ? `'${u.lastLogin}'` : 'NULL';
       lines.push(`INSERT OR REPLACE INTO users (id, username, password_hash, salt, role, is_active, must_change_password, created_at, last_login) VALUES ('${u.id}', '${u.username.replace(/'/g, "''")}', '${u.passwordHash}', '${u.salt}', '${u.role}', ${u.isActive ? 1 : 0}, ${u.mustChangePassword ? 1 : 0}, '${u.createdAt}', ${ll});`);
     });
+
+    // App Settings table creation and insert
+    lines.push('');
+    lines.push('-- جدول إعدادات النظام وشعار المدرسة');
+    lines.push('CREATE TABLE IF NOT EXISTS app_settings (');
+    lines.push('    id TEXT PRIMARY KEY,');
+    lines.push('    school_name TEXT,');
+    lines.push('    director_name TEXT,');
+    lines.push('    exam_committee_head TEXT,');
+    lines.push('    city TEXT,');
+    lines.push('    rounding_rule TEXT,');
+    lines.push('    school_logo TEXT,');
+    lines.push('    kufic_logo TEXT');
+    lines.push(');');
+    const s = this.state.settings;
+    const sLogo = s.schoolLogo ? `'${s.schoolLogo.replace(/'/g, "''")}'` : 'NULL';
+    const sKufic = s.kuficLogo ? `'${s.kuficLogo.replace(/'/g, "''")}'` : 'NULL';
+    lines.push(`INSERT OR REPLACE INTO app_settings (id, school_name, director_name, exam_committee_head, city, rounding_rule, school_logo, kufic_logo) VALUES ('default_settings', '${s.schoolName?.replace(/'/g, "''") || ''}', '${s.directorName?.replace(/'/g, "''") || ''}', '${s.examCommitteeHead?.replace(/'/g, "''") || ''}', '${s.city?.replace(/'/g, "''") || ''}', '${s.roundingRule}', ${sLogo}, ${sKufic});`);
 
     lines.push('');
     lines.push('COMMIT;');

@@ -96,6 +96,8 @@ export interface AppSettings {
   passScoreDefault: number;
   confirmPreviousTermEdits: boolean;
   theme: 'dark' | 'light';
+  schoolLogo?: string; // Base64 data URL for school logo
+  kuficLogo?: string; // Base64 data URL for school Kufic geometric logo
 }
 
 export interface ExemptionSettings {
@@ -156,6 +158,38 @@ export interface AuthSession {
   loginTime: string;
 }
 
+export type CertificateElementKey =
+  | 'officialLogo'
+  | 'kuficLogo'
+  | 'studentName'
+  | 'academicYear'
+  | 'directorName';
+
+export interface CertificateElementConfig {
+  x: number; // percentage from left (0 to 100)
+  y: number; // percentage from top (0 to 100)
+  width?: number; // percentage width of certificate canvas (e.g. 10%)
+  height?: number; // percentage height or auto
+  fontSize?: number; // font size in px at design base 1123px width
+  fontWeight?: 'normal' | 'bold' | 'black';
+  fontColor?: string; // hex color e.g. '#0f172a'
+  fontFamily?: string; // 'Cairo' | 'Tajawal' | 'Amiri'
+  textAlign?: 'center' | 'right' | 'left';
+  visible: boolean;
+}
+
+export interface CertificateTemplateConfig {
+  templateImage?: string; // Base64 data URL of uploaded background template
+  elements: {
+    officialLogo: CertificateElementConfig;
+    kuficLogo: CertificateElementConfig;
+    studentName: CertificateElementConfig;
+    academicYear: CertificateElementConfig;
+    directorName: CertificateElementConfig;
+  };
+  lastUpdated?: string;
+}
+
 export type ActiveTab = 
   | 'dashboard'
   | 'years'
@@ -166,6 +200,7 @@ export type ActiveTab =
   | 'results'
   | 'exemption'
   | 'reports'
+  | 'certificate_template'
   | 'backup'
   | 'settings';
 

@@ -18,6 +18,7 @@ import {
   PanelRightOpen,
   ShieldCheck,
   Award,
+  Sparkles,
   User,
   LogOut,
 } from 'lucide-react';
@@ -73,8 +74,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'results', label: 'عرض النتائج', number: '٧', icon: GraduationCap },
     { id: 'exemption', label: 'الإعفاء العام والفردي', number: '٨', icon: Award, isHighlight: false, badge: 'جديد' },
     { id: 'reports', label: 'التقارير والطباعة', number: '٩', icon: Printer },
-    { id: 'backup', label: 'النسخ الاحتياطي واستعادة البيانات', number: '١٠', icon: Database },
-    { id: 'settings', label: 'الإعدادات', number: '١١', icon: Settings },
+    {
+      id: 'certificate_template',
+      label: 'ضبط قالب الشهادات',
+      number: '١٠',
+      icon: Sparkles,
+      badge: 'جديد',
+    },
+    { id: 'backup', label: 'النسخ الاحتياطي واستعادة البيانات', number: '١١', icon: Database },
+    { id: 'settings', label: 'الإعدادات', number: '١٢', icon: Settings },
   ];
 
   return (
@@ -82,13 +90,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Mobile Backdrop */}
       {isMobileOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-xs md:hidden"
+          className="no-print fixed inset-0 z-40 bg-black/70 backdrop-blur-xs md:hidden"
           onClick={onCloseMobile}
         />
       )}
 
       <aside
-        className={`fixed top-0 right-0 z-50 h-screen bg-slate-900 border-l border-slate-800 flex flex-col justify-between transition-all duration-200 ease-in-out md:translate-x-0 select-none ${
+        className={`no-print fixed top-0 right-0 z-50 h-screen bg-slate-900 border-l border-slate-800 flex flex-col justify-between transition-all duration-200 ease-in-out md:translate-x-0 select-none ${
           isMobileOpen
             ? 'translate-x-0 shadow-2xl w-72'
             : isCollapsed

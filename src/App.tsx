@@ -15,6 +15,7 @@ import { StudentsManagement } from './components/Management/StudentsManagement';
 import { SubjectsManagement } from './components/Management/SubjectsManagement';
 import { BackupRestoreView } from './components/Backup/BackupRestoreView';
 import { SettingsView } from './components/Settings/SettingsView';
+import { CertificateTemplateView } from './components/CertificateTemplate/CertificateTemplateView';
 import { LoginView } from './components/Auth/LoginView';
 import { ForceChangePasswordModal } from './components/Auth/ForceChangePasswordModal';
 import { AccountSettingsModal } from './components/Auth/AccountSettingsModal';
@@ -134,7 +135,7 @@ export default function App() {
     <div
       className={`min-h-screen ${
         theme === 'dark' ? 'bg-[#202631] text-[#E0E6ED]' : 'bg-[#F3F5F7] text-[#414957]'
-      } flex flex-row-reverse transition-colors duration-200`}
+      } flex flex-row-reverse transition-colors duration-200 print:bg-white print:text-black print:block`}
       dir="rtl"
     >
       {/* Forced Password Change Modal for initial admin login */}
@@ -184,7 +185,7 @@ export default function App() {
       <div
         className={`flex-1 flex flex-col transition-all duration-200 ease-in-out ${
           isSidebarCollapsed ? 'md:mr-20' : 'md:mr-72'
-        } min-h-screen overflow-x-hidden`}
+        } min-h-screen overflow-x-hidden print:m-0 print:p-0 print:w-full print:max-w-none print:overflow-visible`}
       >
         <Header
           activeTab={activeTab}
@@ -199,7 +200,7 @@ export default function App() {
           onLogout={handleLogout}
         />
 
-        <main className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl w-full mx-auto min-w-0">
+        <main className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl w-full mx-auto min-w-0 print:m-0 print:p-0 print:max-w-none print:w-full print:overflow-visible">
           {activeTab === 'dashboard' && (
             <DashboardView
               academicYears={dbState.academicYears}
@@ -259,6 +260,16 @@ export default function App() {
               students={dbState.students}
               grades={dbState.grades}
               settings={dbState.settings}
+            />
+          )}
+
+          {activeTab === 'certificate_template' && (
+            <CertificateTemplateView
+              settings={dbState.settings}
+              academicYears={dbState.academicYears}
+              classes={dbState.classes}
+              sections={dbState.sections}
+              students={dbState.students}
             />
           )}
 

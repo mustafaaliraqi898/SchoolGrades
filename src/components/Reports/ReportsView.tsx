@@ -19,6 +19,7 @@ import {
   ChevronDown,
   School,
 } from 'lucide-react';
+import { SchoolLogo } from '../Common/SchoolLogo';
 
 interface ReportsViewProps {
   academicYears: AcademicYear[];
@@ -247,9 +248,20 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             </div>
 
             <div className="flex flex-col items-center">
-              <div className="w-12 h-12 rounded-full border-2 border-slate-900 flex items-center justify-center font-black text-lg mb-1">
-                <School className="w-6 h-6 text-slate-900" />
-              </div>
+              {settings.schoolLogo ? (
+                <div className="mb-1.5 flex items-center justify-center">
+                  <SchoolLogo
+                    logoUrl={settings.schoolLogo}
+                    schoolName={settings.schoolName}
+                    size="lg"
+                    className="max-h-16 max-w-[120px]"
+                  />
+                </div>
+              ) : (
+                <div className="w-12 h-12 rounded-full border-2 border-slate-900 flex items-center justify-center font-black text-lg mb-1">
+                  <School className="w-6 h-6 text-slate-900" />
+                </div>
+              )}
               <h2 className="font-black text-base text-slate-900">
                 {settings.schoolName}
               </h2>
