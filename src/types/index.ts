@@ -275,6 +275,23 @@ export interface CertificateTemplateConfig {
   lastUpdated?: string;
 }
 
+export interface DecisionGrantRecord {
+  id: string; // `${academicYearId}_${classId}_${sectionId}_${studentId}_${subjectId}_${round}`
+  academicYearId: string;
+  classId: string;
+  sectionId: string;
+  studentId: string;
+  subjectId: string;
+  round: 'round1' | 'round2';
+  originalScore: number;           // الدرجة النهائية الأصلية قبل القرار
+  appliedMarks: number;            // مقدار المساعدة الممنوحة (تصل إلى 50)
+  finalScoreAfterDecision: number; // الدرجة بعد القرار (درجة النجاح 50)
+  requiredPassScore: number;       // درجة النجاح المطلوبة (50)
+  grantedAt: string;               // تاريخ ووقت المنح
+  grantedBy?: string;              // اسم المدير المانح
+  notes?: string;
+}
+
 export type ActiveTab = 
   | 'dashboard'
   | 'years'
@@ -282,10 +299,12 @@ export type ActiveTab =
   | 'students'
   | 'subjects'
   | 'grade_entry'
+  | 'decision_marks'
   | 'results'
   | 'exemption'
   | 'reports'
   | 'certificate_template'
   | 'backup'
   | 'settings';
+
 

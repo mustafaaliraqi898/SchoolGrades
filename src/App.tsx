@@ -91,7 +91,16 @@ export default function App() {
   // Subscribe to real-time database changes
   useEffect(() => {
     const unsubscribe = db.subscribe(() => {
-      setDbState({ ...db.getState() });
+      const currentState = db.getState();
+      setDbState({
+        ...currentState,
+        grades: { ...currentState.grades },
+        students: [...currentState.students],
+        classes: [...currentState.classes],
+        sections: [...currentState.sections],
+        subjects: [...currentState.subjects],
+        academicYears: [...currentState.academicYears],
+      });
     });
     return () => unsubscribe();
   }, []);

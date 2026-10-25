@@ -10,6 +10,7 @@ import {
   AcademicYearDecisionSettings,
   SubjectEvaluation,
   StudentComprehensiveEvaluation,
+  DecisionGrantRecord,
 } from '../types';
 
 /**
@@ -398,7 +399,8 @@ export function evaluateStudentAcademicYearDecisions(
   classSubjects: Subject[],
   studentGrades: Record<string, GradeRecord | undefined>,
   decisionSettings: AcademicYearDecisionSettings,
-  roundingRule: RoundingRule = 'standard'
+  roundingRule: RoundingRule = 'standard',
+  persistedGrants?: Record<string, DecisionGrantRecord>
 ): StudentComprehensiveEvaluation {
   const isGeneralExempt = student.isGeneralExempt === true;
 
@@ -468,7 +470,7 @@ export function evaluateStudentAcademicYearDecisions(
     subjectsList.push(subEval);
   });
 
-  // 1. حساب المساعدة الوزارية الرئيسية في الدور الأول (Primary Ministerial Assistance)
+  // 1. حساب المساعدة الوزارية في الدور الأول (Primary Ministerial Assistance)
   let primaryAssistanceUsed = 0;
   let remainingPrimary = Math.max(0, decisionSettings.primaryAssistanceMarks);
 
@@ -479,8 +481,29 @@ export function evaluateStudentAcademicYearDecisions(
 
   const failedCountBeforeAssistance = failed1stRoundSubs.length;
 
-  if (!isGeneralExempt) {
-    // ترتيب المواد الراسبة حسب الأقرب إلى درجة النجاح 50 (أقل عجز أولاً لإنقاذ أكبر عدد من المواد)
+  if (persistedGrants !== undefined) {
+    // الاعتماد الصارم على القرارات الممنوحة فعلياً بقرار المدير المحفوظ
+    subjectsList.forEach((subEval) => {
+      const grantKey = `${decisionSettings.academicYearId}_${student.classId}_${student.sectionId}_${student.id}_${subEval.subject.id}_round1`;
+      const grant = persistedGrants[grantKey];
+      if (grant && !subEval.isExempt) {
+        subEval.primaryAssistanceApplied = grant.appliedMarks;
+        subEval.finalScoreAfterPrimaryAssistance = grant.finalScoreAfterDecision;
+        subEval.passed1stRound = true;
+        subEval.passedFinal = true;
+        subEval.effectiveFinalScore = grant.finalScoreAfterDecision;
+        primaryAssistanceUsed += grant.appliedMarks;
+        remainingPrimary = Math.max(0, remainingPrimary - grant.appliedMarks);
+      } else {
+        subEval.primaryAssistanceApplied = 0;
+        subEval.finalScoreAfterPrimaryAssistance = subEval.rawFinalScore;
+        subEval.passed1stRound = subEval.isExempt || (subEval.rawFinalScore !== null && subEval.rawFinalScore >= subEval.subject.passScore);
+        subEval.passedFinal = subEval.passed1stRound;
+        subEval.effectiveFinalScore = subEval.rawFinalScore;
+      }
+    });
+  } else if (!isGeneralExempt) {
+    // المحاكاة التلقائية الافتراضية في حال عدم توفير القرارات المحفوظة
     const sortedFailing = [...failed1stRoundSubs].sort((a, b) => {
       const deficitA = a.subject.passScore - (a.rawFinalScore ?? 0);
       const deficitB = b.subject.passScore - (b.rawFinalScore ?? 0);
@@ -490,7 +513,6 @@ export function evaluateStudentAcademicYearDecisions(
     sortedFailing.forEach((subEval) => {
       const needed = subEval.subject.passScore - (subEval.rawFinalScore ?? 0);
       if (needed > 0 && remainingPrimary >= needed) {
-        // منح المقدار المطلوب فقط لتصل الدرجة إلى 50 بالضبط
         subEval.primaryAssistanceApplied = needed;
         subEval.finalScoreAfterPrimaryAssistance = subEval.subject.passScore;
         subEval.passed1stRound = true;
@@ -499,7 +521,6 @@ export function evaluateStudentAcademicYearDecisions(
         primaryAssistanceUsed += needed;
         remainingPrimary -= needed;
       } else {
-        // الرصيد لا يكفي للوصول إلى 50: لا تُضاف أي درجات وتبقى المادة راسبة
         subEval.primaryAssistanceApplied = 0;
         subEval.finalScoreAfterPrimaryAssistance = subEval.rawFinalScore;
         subEval.passed1stRound = false;
@@ -529,9 +550,7 @@ export function evaluateStudentAcademicYearDecisions(
   }
 
   // 2. معالجة الدور الثاني والإكمال (Second Round / Make-up Exam)
-  // لا يُتاح امتحان الإكمال إلا للطالب المكمّل في المواد التي رسب فيها حصراً
   const isStudentMokammal = status1stRound === 'مكمّل';
-
   let hasSecondRoundScores = false;
 
   subjectsList.forEach((subEval) => {
@@ -548,12 +567,10 @@ export function evaluateStudentAcademicYearDecisions(
         subEval.secondRoundFinalScore = mkFinal;
 
         if (mkFinal !== null && mkFinal >= subEval.subject.passScore) {
-          // نجح الطالب في الدور الثاني دون الحاجة إلى مساعدة
           subEval.passedFinal = true;
           subEval.finalScoreAfterSecondRoundAssistance = mkFinal;
           subEval.effectiveFinalScore = mkFinal;
         } else {
-          // راسب مؤقتاً في الدور الثاني بانتظار تطبيق المساعدة المتبقية والإضافية
           subEval.passedFinal = false;
           subEval.finalScoreAfterSecondRoundAssistance = mkFinal;
           subEval.effectiveFinalScore = mkFinal;
@@ -565,7 +582,6 @@ export function evaluateStudentAcademicYearDecisions(
   });
 
   // 3. المساعدة المتبقية والإضافية بعد الدور الثاني
-  // رصيد المساعدة المتاح بعد الدور الثاني = درجات المساعدة الرئيسية المتبقية + درجات المساعدة الإضافية
   const totalAssistancePoolSecondRound =
     primaryAssistanceRemaining + Math.max(0, decisionSettings.secondRoundAdditionalAssistanceMarks || 0);
 
@@ -573,39 +589,58 @@ export function evaluateStudentAcademicYearDecisions(
   let secondRoundAssistanceUsed = 0;
 
   if (isStudentMokammal && hasSecondRoundScores) {
-    // حصر المواد الراسبة بعد الإكمال
-    const failingAfter2ndRound = subjectsList.filter(
-      (s) =>
-        s.isMakeUpEligible &&
-        s.secondRoundFinalScore !== null &&
-        s.secondRoundFinalScore < s.subject.passScore
-    );
+    if (persistedGrants !== undefined) {
+      // الاعتماد الصارم على القرارات الممنوحة فعلياً في الدور الثاني
+      subjectsList.forEach((subEval) => {
+        if (!subEval.isMakeUpEligible || subEval.secondRoundFinalScore === null) return;
+        const grant2Key = `${decisionSettings.academicYearId}_${student.classId}_${student.sectionId}_${student.id}_${subEval.subject.id}_round2`;
+        const grant2 = persistedGrants[grant2Key];
+        if (grant2) {
+          subEval.secondRoundAssistanceApplied = grant2.appliedMarks;
+          subEval.finalScoreAfterSecondRoundAssistance = grant2.finalScoreAfterDecision;
+          subEval.passedFinal = true;
+          subEval.effectiveFinalScore = grant2.finalScoreAfterDecision;
+          secondRoundAssistanceUsed += grant2.appliedMarks;
+          available2ndPool = Math.max(0, available2ndPool - grant2.appliedMarks);
+        } else {
+          subEval.secondRoundAssistanceApplied = 0;
+          subEval.finalScoreAfterSecondRoundAssistance = subEval.secondRoundFinalScore;
+          subEval.passedFinal = subEval.secondRoundFinalScore >= subEval.subject.passScore;
+          subEval.effectiveFinalScore = subEval.secondRoundFinalScore;
+        }
+      });
+    } else {
+      // المحاكاة التلقائية في حال عدم توفير القرارات المحفوظة
+      const failingAfter2ndRound = subjectsList.filter(
+        (s) =>
+          s.isMakeUpEligible &&
+          s.secondRoundFinalScore !== null &&
+          s.secondRoundFinalScore < s.subject.passScore
+      );
 
-    // ترتيب تصاعدي حسب العجز
-    const sortedFailing2nd = [...failingAfter2ndRound].sort((a, b) => {
-      const defA = a.subject.passScore - (a.secondRoundFinalScore ?? 0);
-      const defB = b.subject.passScore - (b.secondRoundFinalScore ?? 0);
-      return defA - defB;
-    });
+      const sortedFailing2nd = [...failingAfter2ndRound].sort((a, b) => {
+        const defA = a.subject.passScore - (a.secondRoundFinalScore ?? 0);
+        const defB = b.subject.passScore - (b.secondRoundFinalScore ?? 0);
+        return defA - defB;
+      });
 
-    sortedFailing2nd.forEach((subEval) => {
-      const needed = subEval.subject.passScore - (subEval.secondRoundFinalScore ?? 0);
-      if (needed > 0 && available2ndPool >= needed) {
-        // رصيد المساعدة يكفي للوصول إلى 50: تُضاف الحاجة فقط لتصبح 50 بالضبط
-        subEval.secondRoundAssistanceApplied = needed;
-        subEval.finalScoreAfterSecondRoundAssistance = subEval.subject.passScore;
-        subEval.passedFinal = true;
-        subEval.effectiveFinalScore = subEval.subject.passScore;
-        secondRoundAssistanceUsed += needed;
-        available2ndPool -= needed;
-      } else {
-        // رصيد المساعدة لا يكفي لإيصال الطالب إلى 50: لا تُضاف أي مساعدة إطلاقاً ويبقى راسباً
-        subEval.secondRoundAssistanceApplied = 0;
-        subEval.finalScoreAfterSecondRoundAssistance = subEval.secondRoundFinalScore;
-        subEval.passedFinal = false;
-        subEval.effectiveFinalScore = subEval.secondRoundFinalScore;
-      }
-    });
+      sortedFailing2nd.forEach((subEval) => {
+        const needed = subEval.subject.passScore - (subEval.secondRoundFinalScore ?? 0);
+        if (needed > 0 && available2ndPool >= needed) {
+          subEval.secondRoundAssistanceApplied = needed;
+          subEval.finalScoreAfterSecondRoundAssistance = subEval.subject.passScore;
+          subEval.passedFinal = true;
+          subEval.effectiveFinalScore = subEval.subject.passScore;
+          secondRoundAssistanceUsed += needed;
+          available2ndPool -= needed;
+        } else {
+          subEval.secondRoundAssistanceApplied = 0;
+          subEval.finalScoreAfterSecondRoundAssistance = subEval.secondRoundFinalScore;
+          subEval.passedFinal = false;
+          subEval.effectiveFinalScore = subEval.secondRoundFinalScore;
+        }
+      });
+    }
   }
 
   const secondRoundAssistanceRemaining = available2ndPool;

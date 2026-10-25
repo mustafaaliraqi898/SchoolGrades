@@ -11,8 +11,13 @@ import {
   UserAccount,
   CertificateTemplateConfig,
   AcademicYearDecisionSettings,
+  DecisionGrantRecord,
 } from '../types';
-import { recalculateGradeRecord } from './calculations';
+import {
+  recalculateGradeRecord,
+  calculateFinalScore,
+  calculateSecondRoundFinalScore,
+} from './calculations';
 import {
   completeDemoSeedData,
   CANONICAL_SUBJECTS,
@@ -90,6 +95,7 @@ export interface DatabaseState {
   settings: AppSettings;
   exemptionSettings?: Record<string, ExemptionSettings>; // key: academicYearId
   decisionSettings?: Record<string, AcademicYearDecisionSettings>; // key: academicYearId
+  decisionGrants?: Record<string, DecisionGrantRecord>; // key: `${academicYearId}_${classId}_${sectionId}_${studentId}_${subjectId}_${round}`
   certificateTemplate?: CertificateTemplateConfig;
   users?: UserAccount[];
   version: string;
@@ -277,6 +283,17 @@ export function buildGradeKey(
   return `${academicYearId}_${classId}_${sectionId}_${subjectId}_${studentId}`;
 }
 
+export function buildDecisionKey(
+  academicYearId: string,
+  classId: string,
+  sectionId: string,
+  studentId: string,
+  subjectId: string,
+  round: 'round1' | 'round2'
+): string {
+  return `${academicYearId}_${classId}_${sectionId}_${studentId}_${subjectId}_${round}`;
+}
+
 export class LocalStorageEngine {
   private state: DatabaseState;
   private listeners: Set<() => void> = new Set();
@@ -332,6 +349,10 @@ export class LocalStorageEngine {
             parsed.decisionSettings = {};
           }
 
+          if (!parsed.decisionGrants) {
+            parsed.decisionGrants = {};
+          }
+
           // Ensure default admin exists if no users are found
           let stateNeedsPersist = false;
           if (!parsed.users || !Array.isArray(parsed.users) || parsed.users.length === 0) {
@@ -362,6 +383,7 @@ export class LocalStorageEngine {
       settings: INITIAL_SETTINGS,
       exemptionSettings: {},
       decisionSettings: {},
+      decisionGrants: {},
       users: [INITIAL_DEFAULT_ADMIN],
       version: '1.0.0',
       lastBackupDate: new Date().toISOString(),
@@ -401,7 +423,11 @@ export class LocalStorageEngine {
   }
 
   public getState(): DatabaseState {
-    return this.state;
+    return {
+      ...this.state,
+      grades: { ...this.state.grades },
+      decisionGrants: { ...(this.state.decisionGrants || {}) },
+    };
   }
 
   // --- Grade Operations ---
@@ -476,7 +502,11 @@ export class LocalStorageEngine {
     updatedRecord.finalScore = finalScore;
     updatedRecord.secondRoundFinalScore = secondRoundFinalScore;
 
-    this.state.grades[key] = updatedRecord;
+    this.state.grades = {
+      ...this.state.grades,
+      [key]: updatedRecord,
+    };
+    this.revalidateStudentDecisionGrants(studentId, academicYearId);
     this.notify();
 
     return { success: true, record: updatedRecord };
@@ -486,14 +516,19 @@ export class LocalStorageEngine {
   public updateSettings(settings: Partial<AppSettings>): void {
     this.state.settings = { ...this.state.settings, ...settings };
     
-    // Recalculate all grades if rounding rule changed
+    // Recalculate all grades immutably if rounding rule changed
+    const updatedGrades: Record<string, GradeRecord> = {};
     Object.keys(this.state.grades).forEach((key) => {
       const g = this.state.grades[key];
       const recalculated = recalculateGradeRecord(g, this.state.settings.roundingRule);
-      g.termYearlyScore = recalculated.termYearlyScore;
-      g.finalScore = recalculated.finalScore;
-      g.secondRoundFinalScore = recalculated.secondRoundFinalScore;
+      updatedGrades[key] = {
+        ...g,
+        termYearlyScore: recalculated.termYearlyScore,
+        finalScore: recalculated.finalScore,
+        secondRoundFinalScore: recalculated.secondRoundFinalScore,
+      };
     });
+    this.state.grades = updatedGrades;
 
     this.notify();
   }
@@ -568,6 +603,303 @@ export class LocalStorageEngine {
     this.notify();
   }
 
+  // --- Decision Grants Management (منح وسجل قرارات المساعدة الوزارية) ---
+  public getDecisionGrants(): Record<string, DecisionGrantRecord> {
+    if (!this.state.decisionGrants) {
+      this.state.decisionGrants = {};
+    }
+    return this.state.decisionGrants;
+  }
+
+  public getDecisionGrant(
+    academicYearId: string,
+    classId: string,
+    sectionId: string,
+    studentId: string,
+    subjectId: string,
+    round: 'round1' | 'round2'
+  ): DecisionGrantRecord | undefined {
+    const key = buildDecisionKey(academicYearId, classId, sectionId, studentId, subjectId, round);
+    return this.getDecisionGrants()[key];
+  }
+
+  public getStudentDecisionGrants(
+    studentId: string,
+    academicYearId: string,
+    round?: 'round1' | 'round2'
+  ): DecisionGrantRecord[] {
+    const grants = Object.values(this.getDecisionGrants());
+    return grants.filter((g) => {
+      if (g.studentId !== studentId || g.academicYearId !== academicYearId) return false;
+      if (round && g.round !== round) return false;
+      return true;
+    });
+  }
+
+  public getStudentDecisionBalance(
+    studentId: string,
+    academicYearId: string,
+    round: 'round1' | 'round2'
+  ): {
+    totalPool: number;
+    usedMarks: number;
+    remainingMarks: number;
+    primaryPool: number;
+    primaryUsed: number;
+    primaryRemaining: number;
+    secondRoundAdditional: number;
+  } {
+    const decSettings = this.getDecisionSettings(academicYearId);
+    const round1Grants = this.getStudentDecisionGrants(studentId, academicYearId, 'round1');
+    const primaryUsed = round1Grants.reduce((sum, g) => sum + g.appliedMarks, 0);
+    const primaryPool = Math.max(0, decSettings.primaryAssistanceMarks);
+    const primaryRemaining = Math.max(0, primaryPool - primaryUsed);
+
+    const secondRoundAdditional = Math.max(0, decSettings.secondRoundAdditionalAssistanceMarks || 0);
+    const round2Pool = primaryRemaining + secondRoundAdditional;
+
+    const round2Grants = this.getStudentDecisionGrants(studentId, academicYearId, 'round2');
+    const round2Used = round2Grants.reduce((sum, g) => sum + g.appliedMarks, 0);
+    const round2Remaining = Math.max(0, round2Pool - round2Used);
+
+    if (round === 'round1') {
+      return {
+        totalPool: primaryPool,
+        usedMarks: primaryUsed,
+        remainingMarks: primaryRemaining,
+        primaryPool,
+        primaryUsed,
+        primaryRemaining,
+        secondRoundAdditional,
+      };
+    } else {
+      return {
+        totalPool: round2Pool,
+        usedMarks: round2Used,
+        remainingMarks: round2Remaining,
+        primaryPool,
+        primaryUsed,
+        primaryRemaining,
+        secondRoundAdditional,
+      };
+    }
+  }
+
+  public grantDecision(params: {
+    academicYearId: string;
+    classId: string;
+    sectionId: string;
+    studentId: string;
+    subjectId: string;
+    round: 'round1' | 'round2';
+    grantedBy?: string;
+    notes?: string;
+  }): { success: boolean; grant?: DecisionGrantRecord; error?: string } {
+    if (!this.state.decisionGrants) {
+      this.state.decisionGrants = {};
+    }
+
+    const key = buildDecisionKey(
+      params.academicYearId,
+      params.classId,
+      params.sectionId,
+      params.studentId,
+      params.subjectId,
+      params.round
+    );
+
+    // Prevent duplicate grant & deduction
+    if (this.state.decisionGrants[key]) {
+      return {
+        success: false,
+        grant: this.state.decisionGrants[key],
+        error: 'تم منح القرار مسبقاً لهذه المادة ولن يتم خصم الرصيد مرة أخرى.',
+      };
+    }
+
+    const student = this.state.students.find((s) => s.id === params.studentId);
+    if (!student) {
+      return { success: false, error: 'لم يتم العثور على بيانات الطالب.' };
+    }
+
+    const subject = this.state.subjects.find((s) => s.id === params.subjectId);
+    if (!subject) {
+      return { success: false, error: 'لم يتم العثور على المادة الدراسية.' };
+    }
+
+    const gradeKey = buildGradeKey(
+      params.academicYearId,
+      params.classId,
+      params.sectionId,
+      params.subjectId,
+      params.studentId
+    );
+    const gradeRec = this.state.grades[gradeKey];
+    if (!gradeRec) {
+      return { success: false, error: 'لا يوجد سجل درجات لهذه المادة.' };
+    }
+
+    const passScore = subject.passScore || 50;
+    const balance = this.getStudentDecisionBalance(params.studentId, params.academicYearId, params.round);
+
+    let originalScore: number | null = null;
+    if (params.round === 'round1') {
+      if (gradeRec.termYearlyScore === null || gradeRec.finalExamScore === null) {
+        return { success: false, error: 'درجات السعي والامتحان النهائي غير مكتملة لهذه المادة.' };
+      }
+      originalScore = calculateFinalScore(
+        gradeRec.termYearlyScore,
+        gradeRec.finalExamScore,
+        this.state.settings.roundingRule
+      );
+    } else {
+      if (gradeRec.termYearlyScore === null || gradeRec.secondRoundScore === null) {
+        return { success: false, error: 'درجة السعي السنوي أو درجة الإكمال (الدور الثاني) غير متوفرة.' };
+      }
+      originalScore = calculateSecondRoundFinalScore(
+        gradeRec.termYearlyScore,
+        gradeRec.secondRoundScore,
+        this.state.settings.roundingRule
+      );
+    }
+
+    if (originalScore === null) {
+      return { success: false, error: 'تعذر حساب الدرجة النهائية الأصلية للمادة.' };
+    }
+
+    if (originalScore >= passScore) {
+      return {
+        success: false,
+        error: `الطالب ناجح أصلاً في هذه المادة (الدرجة: ${originalScore} من ${passScore}). لا داعي لمنح القرار.`,
+      };
+    }
+
+    const neededMarks = passScore - originalScore;
+    if (neededMarks <= 0) {
+      return { success: false, error: 'الدرجة لا تحتاج مساعدة للنجاح.' };
+    }
+
+    if (balance.remainingMarks < neededMarks) {
+      return {
+        success: false,
+        error: `رصيد المساعدة المتاح (${balance.remainingMarks} درجات) غير كافٍ لإيصال المادة إلى درجة النجاح ${passScore} (تحتاج ${neededMarks} درجات). لا يُسمح بمنح مساعدة جزئية.`,
+      };
+    }
+
+    const newGrant: DecisionGrantRecord = {
+      id: key,
+      academicYearId: params.academicYearId,
+      classId: params.classId,
+      sectionId: params.sectionId,
+      studentId: params.studentId,
+      subjectId: params.subjectId,
+      round: params.round,
+      originalScore,
+      appliedMarks: neededMarks,
+      finalScoreAfterDecision: passScore,
+      requiredPassScore: passScore,
+      grantedAt: new Date().toISOString(),
+      grantedBy: params.grantedBy || 'مدير المدرسة',
+      notes: params.notes || `منح قرار وزاري (${neededMarks} درجات) بموافقة المدير`,
+    };
+
+    this.state.decisionGrants = {
+      ...this.state.decisionGrants,
+      [key]: newGrant,
+    };
+
+    this.notify();
+    return { success: true, grant: newGrant };
+  }
+
+  public revokeDecision(
+    academicYearId: string,
+    classId: string,
+    sectionId: string,
+    studentId: string,
+    subjectId: string,
+    round: 'round1' | 'round2'
+  ): { success: boolean; message?: string } {
+    if (!this.state.decisionGrants) return { success: false, message: 'لا توجد قرارات مسجلة.' };
+
+    const key = buildDecisionKey(academicYearId, classId, sectionId, studentId, subjectId, round);
+    if (!this.state.decisionGrants[key]) {
+      return { success: false, message: 'لم يتم العثور على قرار مسجل لهذه المادة.' };
+    }
+
+    const updated = { ...this.state.decisionGrants };
+    delete updated[key];
+    this.state.decisionGrants = updated;
+
+    this.notify();
+    return { success: true, message: 'تم إلغاء القرار وإعادة الرصيد بنجاح.' };
+  }
+
+  public revalidateStudentDecisionGrants(studentId: string, academicYearId: string): void {
+    if (!this.state.decisionGrants) return;
+
+    let hasChanges = false;
+    const updatedGrants = { ...this.state.decisionGrants };
+    const grants = this.getStudentDecisionGrants(studentId, academicYearId);
+
+    for (const grant of grants) {
+      const subject = this.state.subjects.find((s) => s.id === grant.subjectId);
+      const passScore = subject?.passScore || 50;
+      const gKey = buildGradeKey(academicYearId, grant.classId, grant.sectionId, grant.subjectId, studentId);
+      const rec = this.state.grades[gKey];
+
+      let currentRawScore: number | null = null;
+      if (grant.round === 'round1') {
+        currentRawScore =
+          rec && rec.termYearlyScore !== null && rec.finalExamScore !== null
+            ? calculateFinalScore(rec.termYearlyScore, rec.finalExamScore, this.state.settings.roundingRule)
+            : null;
+      } else {
+        currentRawScore =
+          rec && rec.termYearlyScore !== null && rec.secondRoundScore !== null
+            ? calculateSecondRoundFinalScore(rec.termYearlyScore, rec.secondRoundScore, this.state.settings.roundingRule)
+            : null;
+      }
+
+      // If scores were cleared or student is now naturally passing >= passScore without decision
+      if (currentRawScore === null || currentRawScore >= passScore) {
+        delete updatedGrants[grant.id];
+        hasChanges = true;
+      } else if (currentRawScore !== grant.originalScore) {
+        // Original score changed: re-evaluate if remaining balance can still cover the new needed marks
+        const needed = passScore - currentRawScore;
+        const otherGrantsSum = grants
+          .filter((g) => g.id !== grant.id && g.round === grant.round)
+          .reduce((sum, g) => sum + g.appliedMarks, 0);
+
+        const pool =
+          grant.round === 'round1'
+            ? this.getDecisionSettings(academicYearId).primaryAssistanceMarks
+            : this.getStudentDecisionBalance(studentId, academicYearId, 'round1').remainingMarks +
+              (this.getDecisionSettings(academicYearId).secondRoundAdditionalAssistanceMarks || 0);
+
+        const available = Math.max(0, pool - otherGrantsSum);
+        if (available >= needed && needed > 0) {
+          updatedGrants[grant.id] = {
+            ...grant,
+            originalScore: currentRawScore,
+            appliedMarks: needed,
+            grantedAt: new Date().toISOString(),
+          };
+          hasChanges = true;
+        } else {
+          // Cannot cover new deficit -> revoke grant
+          delete updatedGrants[grant.id];
+          hasChanges = true;
+        }
+      }
+    }
+
+    if (hasChanges) {
+      this.state.decisionGrants = updatedGrants;
+    }
+  }
+
   // --- Student Exemption Management ---
   public setStudentGeneralExempt(studentId: string, isExempt: boolean): void {
     const student = this.state.students.find((s) => s.id === studentId);
@@ -588,12 +920,19 @@ export class LocalStorageEngine {
     }
     student.individualExemptions = Array.from(current);
 
-    // Also sync the GradeRecord if it exists
-    Object.values(this.state.grades).forEach((g) => {
+    // Also sync the GradeRecord immutably if it exists
+    const updatedGrades: Record<string, GradeRecord> = { ...this.state.grades };
+    let hasGradeChange = false;
+    Object.keys(this.state.grades).forEach((k) => {
+      const g = this.state.grades[k];
       if (g.studentId === studentId && g.subjectId === subjectId) {
-        g.isIndividualExempt = shouldExempt;
+        updatedGrades[k] = { ...g, isIndividualExempt: shouldExempt };
+        hasGradeChange = true;
       }
     });
+    if (hasGradeChange) {
+      this.state.grades = updatedGrades;
+    }
 
     this.notify();
   }
@@ -788,12 +1127,14 @@ export class LocalStorageEngine {
 
   public deleteStudent(id: string): void {
     this.state.students = this.state.students.filter((s) => s.id !== id);
-    // Remove student grades
-    Object.keys(this.state.grades).forEach((key) => {
-      if (this.state.grades[key].studentId === id) {
-        delete this.state.grades[key];
+    // Remove student grades immutably
+    const remainingGrades: Record<string, GradeRecord> = {};
+    Object.entries(this.state.grades).forEach(([k, g]) => {
+      if (g.studentId !== id) {
+        remainingGrades[k] = g;
       }
     });
+    this.state.grades = remainingGrades;
     this.notify();
   }
 
@@ -978,11 +1319,13 @@ export class LocalStorageEngine {
     }
 
     // Clean up associated grade records for this subject without disturbing other subjects
-    Object.keys(this.state.grades).forEach((key) => {
-      if (this.state.grades[key].subjectId === subjectId) {
-        delete this.state.grades[key];
+    const remainingGrades: Record<string, GradeRecord> = {};
+    Object.entries(this.state.grades).forEach(([k, g]) => {
+      if (g.subjectId !== subjectId) {
+        remainingGrades[k] = g;
       }
     });
+    this.state.grades = remainingGrades;
 
     this.sortSubjectsInternal();
     this.notify();
@@ -1180,6 +1523,9 @@ export class LocalStorageEngine {
       students: INITIAL_STUDENTS_5SCI_A,
       grades: generateInitialGrades(INITIAL_STUDENTS_5SCI_A, INITIAL_SUBJECTS, INITIAL_SETTINGS),
       settings: INITIAL_SETTINGS,
+      exemptionSettings: {},
+      decisionSettings: {},
+      decisionGrants: {},
       version: '1.0.0',
       lastBackupDate: new Date().toISOString(),
     };

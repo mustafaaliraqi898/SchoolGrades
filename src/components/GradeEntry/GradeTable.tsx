@@ -11,6 +11,9 @@ import {
   validateScoreInput,
   formatScore,
   evaluateStudentAcademicYearDecisions,
+  calculateTermYearlyScore,
+  calculateFinalScore,
+  calculateSecondRoundFinalScore,
 } from '../../services/calculations';
 import { db, buildGradeKey } from '../../services/storage';
 import { EditConfirmationModal } from './EditConfirmationModal';
@@ -422,7 +425,12 @@ export const GradeTable: React.FC<GradeTableProps> = ({
       }
     }
 
-    const gradeRecord = currentSubjectGradesByStudentId[student.id];
+    const studentRecordKey = (academicYearId && classId && sectionId && subjectId)
+      ? buildGradeKey(academicYearId, classId, sectionId, subjectId, student.id)
+      : undefined;
+    const gradeRecord = (studentRecordKey && grades[studentRecordKey])
+      ? grades[studentRecordKey]
+      : currentSubjectGradesByStudentId[student.id];
     const currentValue = gradeRecord ? gradeRecord[field] : null;
 
     // Check if this is an edit of a previous term that already has a value, and requires confirmation
@@ -973,11 +981,34 @@ export const GradeTable: React.FC<GradeTableProps> = ({
               </tr>
             ) : (
               filteredStudents.map((student, sIdx) => {
-                const gradeRecord = currentSubjectGradesByStudentId[student.id];
+                const studentRecordKey = (academicYearId && classId && sectionId && subjectId)
+                  ? buildGradeKey(academicYearId, classId, sectionId, subjectId, student.id)
+                  : undefined;
+                const gradeRecord = (studentRecordKey && grades[studentRecordKey])
+                  ? grades[studentRecordKey]
+                  : currentSubjectGradesByStudentId[student.id];
+
                 const evalData = studentsEvaluations[student.id];
                 const isGeneralExempt = !!evalData?.isGeneralExempt;
                 const subEval = subjectId ? evalData?.subjects[subjectId] : undefined;
                 const isIndividualExempt = !!subEval?.isIndividualExempt;
+
+                const computedYearly = gradeRecord?.termYearlyScore ?? calculateTermYearlyScore(
+                  gradeRecord?.term1Score ?? null,
+                  gradeRecord?.midtermScore ?? null,
+                  gradeRecord?.term2Score ?? null,
+                  settings.roundingRule
+                );
+
+                const computedFinal = isIndividualExempt || isGeneralExempt
+                  ? computedYearly
+                  : (subEval ? subEval.effectiveFinalScore : (gradeRecord?.finalScore ?? calculateFinalScore(computedYearly, gradeRecord?.finalExamScore ?? null, settings.roundingRule)));
+
+                const computedSecondRoundFinal = gradeRecord?.secondRoundFinalScore ?? calculateSecondRoundFinalScore(
+                  computedYearly,
+                  gradeRecord?.secondRoundScore ?? null,
+                  settings.roundingRule
+                );
 
                 return (
                   <tr
@@ -1066,7 +1097,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
                     {/* Auto Column: درجة السعي السنوي */}
                     {(currentStage === 'term2' || currentStage === 'final' || currentStage === 'second_round') &&
                       renderComputedCell(
-                        gradeRecord?.termYearlyScore,
+                        computedYearly,
                         'درجة السعي السنوي',
                         `yearly_${student.id}`,
                         'termYearly'
@@ -1085,7 +1116,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
                     {/* Auto Column: الدرجة النهائية */}
                     {(currentStage === 'final' || currentStage === 'second_round') &&
                       renderComputedCell(
-                        gradeRecord?.finalScore,
+                        computedFinal,
                         'الدرجة النهائية',
                         `final_${student.id}`,
                         'finalScore',
@@ -1105,7 +1136,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
                     {/* Auto Column: الدرجة النهائية بعد الإكمال */}
                     {currentStage === 'second_round' &&
                       renderComputedCell(
-                        gradeRecord?.secondRoundFinalScore,
+                        computedSecondRoundFinal,
                         'الدرجة النهائية بعد الإكمال',
                         `second_final_${student.id}`,
                         'secondRoundFinal'
