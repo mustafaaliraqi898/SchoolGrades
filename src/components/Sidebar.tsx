@@ -71,18 +71,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
       isHighlight: true,
       badge: 'الأساسي',
     },
-    { id: 'results', label: 'عرض النتائج', number: '٧', icon: GraduationCap },
-    { id: 'exemption', label: 'الإعفاء العام والفردي', number: '٨', icon: Award, isHighlight: false, badge: 'جديد' },
-    { id: 'reports', label: 'التقارير والطباعة', number: '٩', icon: Printer },
+    {
+      id: 'decision_marks',
+      label: 'إضافة درجات القرار',
+      number: '٧',
+      icon: ShieldCheck,
+      isHighlight: false,
+      badge: 'مهم',
+    },
+    { id: 'results', label: 'عرض النتائج', number: '٨', icon: GraduationCap },
+    { id: 'exemption', label: 'الإعفاء العام والفردي', number: '٩', icon: Award, isHighlight: false, badge: 'جديد' },
+    { id: 'reports', label: 'التقارير والطباعة', number: '١٠', icon: Printer },
     {
       id: 'certificate_template',
       label: 'ضبط قالب الشهادات',
-      number: '١٠',
+      number: '١١',
       icon: Sparkles,
       badge: 'جديد',
     },
-    { id: 'backup', label: 'النسخ الاحتياطي واستعادة البيانات', number: '١١', icon: Database },
-    { id: 'settings', label: 'الإعدادات', number: '١٢', icon: Settings },
+    { id: 'backup', label: 'النسخ الاحتياطي واستعادة البيانات', number: '١٢', icon: Database },
+    { id: 'settings', label: 'الإعدادات', number: '١٣', icon: Settings },
   ];
 
   return (

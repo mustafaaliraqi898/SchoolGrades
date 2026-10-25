@@ -164,7 +164,8 @@ export const GradeTable: React.FC<GradeTableProps> = ({
         classSubjects,
         studentGradesBySubject,
         decisionSettings,
-        settings.roundingRule
+        settings.roundingRule,
+        db.getDecisionGrants()
       );
     });
     return map;

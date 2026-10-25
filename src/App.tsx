@@ -6,6 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { DashboardView } from './components/Dashboard/DashboardView';
 import { GradeEntryView } from './components/GradeEntry/GradeEntryView';
+import { DecisionMarksView } from './components/Exemption/DecisionMarksView';
 import { ResultsView } from './components/Results/ResultsView';
 import { ExemptionView } from './components/Exemption/ExemptionView';
 import { ReportsView } from './components/Reports/ReportsView';
@@ -233,6 +234,18 @@ export default function App() {
               grades={dbState.grades}
               settings={dbState.settings}
               onNavigateToReports={() => setActiveTab('reports')}
+            />
+          )}
+
+          {activeTab === 'decision_marks' && (
+            <DecisionMarksView
+              academicYears={dbState.academicYears}
+              classes={dbState.classes}
+              sections={dbState.sections}
+              subjects={dbState.subjects}
+              students={dbState.students}
+              grades={dbState.grades}
+              settings={dbState.settings}
             />
           )}
 

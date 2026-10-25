@@ -195,7 +195,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
         classSubjects,
         studentGradesBySubject,
         decisionSettings,
-        settings.roundingRule
+        settings.roundingRule,
+        db.getDecisionGrants()
       );
 
       classSubjects.forEach((sub) => {
