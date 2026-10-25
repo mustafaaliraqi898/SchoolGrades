@@ -12,7 +12,7 @@ import {
   formatScore,
   evaluateStudentAcademicYearDecisions,
 } from '../../services/calculations';
-import { db } from '../../services/storage';
+import { db, buildGradeKey } from '../../services/storage';
 import { EditConfirmationModal } from './EditConfirmationModal';
 import { Check, AlertCircle, Lock, Edit3, MoveHorizontal, RotateCcw } from 'lucide-react';
 
@@ -117,9 +117,25 @@ export const GradeTable: React.FC<GradeTableProps> = ({
   onSaveGrade,
 }) => {
   // Filter students based on search query without breaking seat numbers or sorting
-  const filteredStudents = students.filter((s) =>
-    s.name.toLowerCase().includes(searchQuery.trim().toLowerCase())
-  );
+  const filteredStudents = useMemo(() => {
+    if (!searchQuery.trim()) return students;
+    const q = searchQuery.trim().toLowerCase();
+    return students.filter((s) => s.name.toLowerCase().includes(q));
+  }, [students, searchQuery]);
+
+  // Memoized map of grades for current subject by studentId for O(1) instant access
+  const currentSubjectGradesByStudentId = useMemo(() => {
+    const map: Record<string, GradeRecord> = {};
+    if (!academicYearId || !classId || !sectionId || !subjectId) return map;
+
+    students.forEach((student) => {
+      const key = buildGradeKey(academicYearId, classId, sectionId, subjectId, student.id);
+      if (grades[key]) {
+        map[student.id] = grades[key];
+      }
+    });
+    return map;
+  }, [students, grades, academicYearId, classId, sectionId, subjectId]);
 
   // Decision settings for this academic year
   const decisionSettings = useMemo(() => {
@@ -129,18 +145,21 @@ export const GradeTable: React.FC<GradeTableProps> = ({
 
   // Compute evaluations for make-up eligibility & status
   const studentsEvaluations = useMemo(() => {
-    if (!academicYearId || !classId || !sectionId || !classSubjects || !decisionSettings) {
+    if (!academicYearId || !classId || !sectionId || !classSubjects || classSubjects.length === 0 || !decisionSettings) {
       return {};
     }
     const map: Record<string, StudentComprehensiveEvaluation> = {};
     students.forEach((student) => {
+      const studentGradesBySubject: Record<string, GradeRecord | undefined> = {};
+      classSubjects.forEach((sub) => {
+        const k = buildGradeKey(academicYearId, classId, sectionId, sub.id, student.id);
+        studentGradesBySubject[sub.id] = grades[k];
+      });
+
       map[student.id] = evaluateStudentAcademicYearDecisions(
         student,
-        academicYearId,
-        classId,
-        sectionId,
         classSubjects,
-        grades,
+        studentGradesBySubject,
         decisionSettings,
         settings.roundingRule
       );
@@ -157,14 +176,15 @@ export const GradeTable: React.FC<GradeTableProps> = ({
     if (evalData.isGeneralExempt) {
       return { eligible: false, reason: 'مغلق: الطالب مشمول بالإعفاء العام' };
     }
-    const subEval = evalData.subjects.find((s) => s.subjectId === subjectId);
+    const subEval = subjectId ? evalData.subjects[subjectId] : undefined;
     if (subEval?.isIndividualExempt) {
       return { eligible: false, reason: 'مغلق: الطالب معفى فردياً في هذه المادة' };
     }
-    if (evalData.statusBeforeSecondRound === 'راسب') {
+    const status1st = evalData.status1stRound || evalData.statusBeforeSecondRound;
+    if (status1st === 'راسب') {
       return { eligible: false, reason: 'مغلق: الطالب راسب بحد الرسوب (رسب في 4 مواد أو أكثر)' };
     }
-    if (evalData.statusBeforeSecondRound === 'ناجح') {
+    if (status1st === 'ناجح') {
       return { eligible: false, reason: 'مغلق: الطالب ناجح في الدور الأول' };
     }
     if (subEval && subEval.passed1stRound) {
@@ -372,7 +392,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
       }
     }
 
-    const gradeRecord = Object.values(grades).find((g) => g.studentId === student.id);
+    const gradeRecord = currentSubjectGradesByStudentId[student.id];
     const currentValue = gradeRecord ? gradeRecord[field] : null;
 
     // Check if this is an edit of a previous term that already has a value, and requires confirmation
@@ -912,10 +932,10 @@ export const GradeTable: React.FC<GradeTableProps> = ({
               </tr>
             ) : (
               filteredStudents.map((student, sIdx) => {
-                const gradeRecord = Object.values(grades).find((g) => g.studentId === student.id);
+                const gradeRecord = currentSubjectGradesByStudentId[student.id];
                 const evalData = studentsEvaluations[student.id];
                 const isGeneralExempt = !!evalData?.isGeneralExempt;
-                const subEval = evalData?.subjects.find((s) => s.subjectId === subjectId);
+                const subEval = subjectId ? evalData?.subjects[subjectId] : undefined;
                 const isIndividualExempt = !!subEval?.isIndividualExempt;
 
                 return (

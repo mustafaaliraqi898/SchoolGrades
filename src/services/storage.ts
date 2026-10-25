@@ -227,6 +227,8 @@ function generateInitialGrades(students: Student[], subjects: Subject[], setting
       termYearlyScore,
       finalExamScore: finalExam,
       finalScore,
+      secondRoundScore: null,
+      secondRoundFinalScore: null,
       lastUpdated: new Date().toISOString(),
     };
 
@@ -256,6 +258,8 @@ function generateInitialGrades(students: Student[], subjects: Subject[], setting
       termYearlyScore: arabicCalculated.termYearlyScore,
       finalExamScore: aFinal,
       finalScore: arabicCalculated.finalScore,
+      secondRoundScore: null,
+      secondRoundFinalScore: null,
       lastUpdated: new Date().toISOString(),
     };
   });

@@ -9,7 +9,8 @@ import {
   AppSettings,
   GradeStage,
 } from '../../types';
-import { buildGradeKey } from '../../services/storage';
+import { buildGradeKey, db } from '../../services/storage';
+import { evaluateStudentAcademicYearDecisions } from '../../services/calculations';
 import {
   Printer,
   FileText,
@@ -94,6 +95,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const activeSection = sections.find((s) => s.id === selectedSectionId);
   const activeYear = academicYears.find((y) => y.id === selectedYearId);
   const targetStudent = sectionStudents.find((s) => s.id === selectedStudentId);
+
+  const decisionSettings = useMemo(() => {
+    return db.getDecisionSettings(selectedYearId);
+  }, [selectedYearId]);
 
   const handlePrint = () => {
     window.print();
@@ -299,45 +304,89 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   ))}
                   <th className="border border-slate-800 p-2 text-center w-14">المجموع</th>
                   <th className="border border-slate-800 p-2 text-center w-14">المعدل</th>
-                  <th className="border border-slate-800 p-2 text-center w-16">النتيجة</th>
+                  <th className="border border-slate-800 p-2 text-center w-20">النتيجة</th>
+                  <th className="border border-slate-800 p-2 text-center w-24">الملاحظات</th>
                 </tr>
               </thead>
               <tbody>
                 {sectionStudents.map((stu, sIdx) => {
+                  const studentGradesBySubject: Record<string, GradeRecord | undefined> = {};
+                  classSubjects.forEach((sub) => {
+                    const key = buildGradeKey(
+                      selectedYearId,
+                      selectedClassId,
+                      selectedSectionId,
+                      sub.id,
+                      stu.id
+                    );
+                    studentGradesBySubject[sub.id] = grades[key];
+                  });
+
+                  const evaluation = evaluateStudentAcademicYearDecisions(
+                    stu,
+                    classSubjects,
+                    studentGradesBySubject,
+                    decisionSettings,
+                    settings.roundingRule
+                  );
+
+                  const isGeneralExempt = evaluation.isGeneralExempt;
+
                   let totalFinal = 0;
                   let counted = 0;
-                  let hasFailed = false;
 
                   return (
-                    <tr key={stu.id} className="border-b border-slate-400">
+                    <tr
+                      key={stu.id}
+                      className={`border-b border-slate-400 ${isGeneralExempt ? 'bg-emerald-50' : ''}`}
+                      style={isGeneralExempt ? { backgroundColor: '#ecfdf5' } : undefined}
+                    >
                       <td className="border border-slate-700 p-1.5 text-center font-mono">
                         {sIdx + 1}
                       </td>
                       <td className="border border-slate-700 p-1.5 font-bold">
-                        {stu.name}
+                        <div className="flex items-center justify-between">
+                          <span>{stu.name}</span>
+                          {isGeneralExempt && (
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              إعفاء عام
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {classSubjects.map((sub) => {
-                        const key = buildGradeKey(
-                          selectedYearId,
-                          selectedClassId,
-                          selectedSectionId,
-                          sub.id,
-                          stu.id
-                        );
-                        const rec = grades[key];
+                        const rec = studentGradesBySubject[sub.id];
+                        const subEval = evaluation.subjects[sub.id];
+                        const isIndivExempt = !!subEval?.isIndividualExempt;
                         const yr = rec?.termYearlyScore ?? '—';
-                        const fn = rec?.finalScore ?? '—';
+                        const fn = subEval?.effectiveFinalScore !== null && subEval?.effectiveFinalScore !== undefined
+                          ? subEval.effectiveFinalScore
+                          : (rec?.finalScore ?? '—');
 
-                        if (rec?.finalScore !== null && rec?.finalScore !== undefined) {
-                          totalFinal += rec.finalScore;
+                        if (fn !== null && fn !== undefined && fn !== '—') {
+                          totalFinal += Number(fn);
                           counted++;
-                          if (rec.finalScore < sub.passScore) hasFailed = true;
                         }
 
                         return (
-                          <td key={sub.id} className="border border-slate-700 p-1 text-center font-mono text-[11px]">
-                            {yr} / <span className="font-bold">{fn}</span>
+                          <td
+                            key={sub.id}
+                            style={isIndivExempt ? { backgroundColor: '#eff6ff' } : undefined}
+                            className={`border border-slate-700 p-1 text-center font-mono text-[11px] ${
+                              isIndivExempt ? 'bg-blue-50 text-blue-900 font-bold' : ''
+                            }`}
+                          >
+                            <div className="flex flex-col items-center">
+                              <span>
+                                {yr} / <span className="font-bold">{fn}</span>
+                              </span>
+                              {isIndivExempt && (
+                                <span className="text-[8px] text-blue-700 font-sans">
+                                  معفى فردي
+                                </span>
+                              )}
+                            </div>
                           </td>
                         );
                       })}
@@ -346,10 +395,29 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         {counted > 0 ? totalFinal : '—'}
                       </td>
                       <td className="border border-slate-700 p-1.5 text-center font-mono font-black">
-                        {counted > 0 ? `${Math.round((totalFinal / counted) * 10) / 10}%` : '—'}
+                        {counted === classSubjects.length && classSubjects.length > 0
+                          ? `${Math.round((totalFinal / counted) * 10) / 10}%`
+                          : counted > 0
+                          ? `${Math.round((totalFinal / counted) * 10) / 10}%*`
+                          : '—'}
                       </td>
                       <td className="border border-slate-700 p-1.5 text-center font-bold text-[11px]">
-                        {counted === classSubjects.length ? (hasFailed ? 'مكمل/راسب' : 'ناجح') : 'ناقص'}
+                        <span
+                          className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-black ${
+                            evaluation.statusFinal === 'ناجح' || evaluation.statusFinal === 'ناجح — إعفاء عام'
+                              ? 'text-emerald-800 bg-emerald-50 border border-emerald-300'
+                              : evaluation.statusFinal === 'مكمّل'
+                              ? 'text-amber-800 bg-amber-50 border border-amber-300'
+                              : evaluation.statusFinal === 'راسب'
+                              ? 'text-rose-800 bg-rose-50 border border-rose-300'
+                              : 'text-slate-600 bg-slate-100'
+                          }`}
+                        >
+                          {evaluation.statusFinal}
+                        </span>
+                      </td>
+                      <td className="border border-slate-700 p-1.5 text-center text-[10px] font-bold text-slate-800">
+                        {evaluation.notes}
                       </td>
                     </tr>
                   );

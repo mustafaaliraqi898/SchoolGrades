@@ -654,6 +654,7 @@ export function evaluateStudentAcademicYearDecisions(
     primaryAssistanceRemaining,
     failedCountAfterPrimaryAssistance,
     status1stRound,
+    statusBeforeSecondRound: status1stRound,
     totalAssistancePoolSecondRound,
     secondRoundAssistanceUsed,
     secondRoundAssistanceRemaining,

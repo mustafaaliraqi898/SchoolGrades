@@ -346,6 +346,8 @@ export function completeDemoSeedData(state: DatabaseState): {
         termYearlyScore,
         finalExamScore: plan.finalExam ?? null,
         finalScore,
+        secondRoundScore: null,
+        secondRoundFinalScore: null,
         lastUpdated: new Date().toISOString(),
       };
 

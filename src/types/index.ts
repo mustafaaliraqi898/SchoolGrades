@@ -102,6 +102,7 @@ export interface AcademicYearDecisionSettings {
   maxFailedSubjectsAllowed: number;              // عدد دروس الرسوب المسموح بها (الافتراضي: 4 مواد)
   primaryAssistanceMarks: number;                // درجات المساعدة الوزارية الرئيسية (الافتراضي: 10 درجات)
   secondRoundAdditionalAssistanceMarks: number;  // درجات المساعدة الوزارية الإضافية بعد الدور الثاني (الافتراضي: 0 درجات)
+  notes?: string;                                // ملاحظات الإعدادات
   updatedAt?: string;
 }
 
@@ -152,6 +153,8 @@ export interface StudentComprehensiveEvaluation {
   primaryAssistanceRemaining: number;
   failedCountAfterPrimaryAssistance: number;
   status1stRound: 'ناجح' | 'مكمّل' | 'راسب' | 'غير مكتمل' | 'ناجح — إعفاء عام';
+  /** حقل إضافي بديل للتوافق البرمجي */
+  statusBeforeSecondRound?: 'ناجح' | 'مكمّل' | 'راسب' | 'غير مكتمل' | 'ناجح — إعفاء عام';
   
   // نتائج الدور الثاني والمساعدة الإضافية
   totalAssistancePoolSecondRound: number;

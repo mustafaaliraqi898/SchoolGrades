@@ -176,17 +176,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
       const subjectScores: Record<string, number | null> = {};
 
-      const evaluation = evaluateStudentAcademicYearDecisions(
-        student,
-        selectedYearId,
-        selectedClassId,
-        selectedSectionId,
-        classSubjects,
-        grades,
-        decisionSettings,
-        settings.roundingRule
-      );
-
+      const studentGradesBySubject: Record<string, GradeRecord | undefined> = {};
       classSubjects.forEach((sub) => {
         const key = buildGradeKey(
           selectedYearId,
@@ -195,12 +185,24 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
           sub.id,
           student.id
         );
-        const record = grades[key];
+        studentGradesBySubject[sub.id] = grades[key];
+      });
+
+      const evaluation = evaluateStudentAcademicYearDecisions(
+        student,
+        classSubjects,
+        studentGradesBySubject,
+        decisionSettings,
+        settings.roundingRule
+      );
+
+      classSubjects.forEach((sub) => {
+        const record = studentGradesBySubject[sub.id];
 
         // Read specific score field requested
         let score: number | null = null;
         if (selectedGradeType === 'finalScore') {
-          const subEval = evaluation.subjects.find((s) => s.subjectId === sub.id);
+          const subEval = evaluation.subjects[sub.id];
           score = subEval ? subEval.effectiveFinalScore : (record?.finalScore ?? null);
         } else if (selectedGradeType === 'secondRoundFinalScore') {
           score = record?.secondRoundFinalScore ?? null;
@@ -281,7 +283,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
     const completed = studentResults.filter((r) => r.isComplete).length;
     const passed = studentResults.filter((r) => r.status === 'ناجح' || r.status === 'ناجح — إعفاء عام').length;
-    const supplementary = studentResults.filter((r) => r.status === 'مكمّل' || r.status === 'مكمل').length;
+    const supplementary = studentResults.filter((r) => r.status === 'مكمّل' || (r.status as string) === 'مكمل').length;
     const failed = studentResults.filter((r) => r.status === 'راسب').length;
     const incomplete = studentResults.filter((r) => r.status === 'غير مكتمل').length;
 
@@ -501,7 +503,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                     const score = r.subjectScores[sub.id];
                     const isNull = score === null || score === undefined || isNaN(score);
                     const isPass = !isNull && score >= sub.passScore;
-                    const subEval = r.evaluation.subjects.find((s) => s.subjectId === sub.id);
+                    const subEval = r.evaluation.subjects[sub.id];
                     const isIndivExempt = !!subEval?.isIndividualExempt;
 
                     return (
@@ -533,7 +535,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                       className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-black ${
                         r.status === 'ناجح' || r.status === 'ناجح — إعفاء عام'
                           ? 'text-emerald-800 bg-emerald-50 border border-emerald-300'
-                          : r.status === 'مكمّل' || r.status === 'مكمل'
+                          : r.status === 'مكمّل' || (r.status as string) === 'مكمل'
                           ? 'text-amber-800 bg-amber-50 border border-amber-300'
                           : r.status === 'راسب'
                           ? 'text-rose-800 bg-rose-50 border border-rose-300'
@@ -915,7 +917,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                       const score = r.subjectScores[sub.id];
                       const isNull = score === null || score === undefined || isNaN(score);
                       const isPass = !isNull && score >= sub.passScore;
-                      const subEval = r.evaluation.subjects.find((s) => s.subjectId === sub.id);
+                      const subEval = r.evaluation.subjects[sub.id];
                       const isIndivExempt = !!subEval?.isIndividualExempt;
 
                       return (
@@ -967,7 +969,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${
                           r.status === 'ناجح' || r.status === 'ناجح — إعفاء عام'
                             ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
-                            : r.status === 'مكمّل' || r.status === 'مكمل'
+                            : r.status === 'مكمّل' || (r.status as string) === 'مكمل'
                             ? 'bg-amber-950 text-amber-400 border-amber-800'
                             : r.status === 'راسب'
                             ? 'bg-red-950 text-red-400 border-red-800'

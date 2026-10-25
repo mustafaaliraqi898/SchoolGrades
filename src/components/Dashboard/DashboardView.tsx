@@ -47,6 +47,7 @@ const STAGE_LABELS: Record<GradeStage, string> = {
   midterm: 'نصف السنة',
   term2: 'الفصل الثاني',
   final: 'الامتحان النهائي',
+  second_round: 'الدور الثاني (الإكمال)',
 };
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
