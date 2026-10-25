@@ -171,7 +171,7 @@ export const GradeTable: React.FC<GradeTableProps> = ({
   const getSubjectMakeUpEligibility = useCallback((studentId: string): { eligible: boolean; reason: string } => {
     const evalData = studentsEvaluations[studentId];
     if (!evalData) {
-      return { eligible: true, reason: '' };
+      return { eligible: false, reason: 'مغلق: بيانات التقييم غير متوفرة بعد' };
     }
     if (evalData.isGeneralExempt) {
       return { eligible: false, reason: 'مغلق: الطالب مشمول بالإعفاء العام' };
@@ -180,18 +180,48 @@ export const GradeTable: React.FC<GradeTableProps> = ({
     if (subEval?.isIndividualExempt) {
       return { eligible: false, reason: 'مغلق: الطالب معفى فردياً في هذه المادة' };
     }
+
     const status1st = evalData.status1stRound || evalData.statusBeforeSecondRound;
-    if (status1st === 'راسب') {
-      return { eligible: false, reason: 'مغلق: الطالب راسب بحد الرسوب (رسب في 4 مواد أو أكثر)' };
+
+    // 1. فحص اكتمال درجات الدور الأول للطالب والمادة
+    if (!evalData.isComplete1stRound || status1st === 'غير مكتمل') {
+      return { eligible: false, reason: 'مغلق: لا يمكن رصد الدور الثاني قبل اكتمال درجات الدور الأول لجميع المواد' };
     }
-    if (status1st === 'ناجح') {
+    if (subEval?.termYearlyScore === null || subEval?.finalExamScore === null || subEval?.rawFinalScore === null) {
+      return { eligible: false, reason: 'مغلق: درجات السعي والامتحان النهائي لهذه المادة غير مكتملة' };
+    }
+
+    // 2. فحص النجاح في الدور الأول
+    if (status1st === 'ناجح' || status1st === 'ناجح — إعفاء عام') {
       return { eligible: false, reason: 'مغلق: الطالب ناجح في الدور الأول' };
     }
     if (subEval && subEval.passed1stRound) {
-      return { eligible: false, reason: `مغلق: ناجح في هذه المادة في الدور الأول (${subEval.finalScoreAfterPrimaryAssistance})` };
+      return {
+        eligible: false,
+        reason: `مغلق: الطالب ناجح في هذه المادة في الدور الأول (${subEval.finalScoreAfterPrimaryAssistance ?? subEval.rawFinalScore})`,
+      };
     }
+
+    // 3. فحص ضوابط حد الرسوب المعتمدة في إعدادات الإدارة
+    const maxFailedAllowed = decisionSettings?.maxFailedSubjectsAllowed ?? 4;
+    if (status1st === 'راسب' || evalData.failedCountAfterPrimaryAssistance >= maxFailedAllowed) {
+      return {
+        eligible: false,
+        reason: `مغلق: الطالب راسب بحد الرسوب (${evalData.failedCountAfterPrimaryAssistance} مواد راسبة، والحد الأقصى للإكمال أقل من ${maxFailedAllowed} مواد)`,
+      };
+    }
+
+    // 4. التأكد من أهلية الإكمال
+    if (status1st !== 'مكمّل') {
+      return { eligible: false, reason: 'مغلق: الطالب غير مكمّل ولا يحق له أداء الدور الثاني' };
+    }
+
+    if (!subEval?.isMakeUpEligible) {
+      return { eligible: false, reason: 'مغلق: هذه المادة غير مشمولة بالدور الثاني' };
+    }
+
     return { eligible: true, reason: 'مؤهل لامتحان الدور الثاني (مكمّل في هذه المادة)' };
-  }, [studentsEvaluations, subjectId]);
+  }, [studentsEvaluations, subjectId, decisionSettings]);
 
   // Column widths with localStorage persistence
   const [colWidths, setColWidths] = useState<ColumnWidths>(() => {
@@ -424,6 +454,14 @@ export const GradeTable: React.FC<GradeTableProps> = ({
     const student = filteredStudents[activeCell.studentIndex];
     if (!student) return;
 
+    if (activeCell.field === 'secondRoundScore') {
+      const eligibility = getSubjectMakeUpEligibility(student.id);
+      if (!eligibility.eligible) {
+        setInputError(eligibility.reason);
+        return;
+      }
+    }
+
     const validation = validateScoreInput(inputValue, maxScore);
     if (!validation.isValid) {
       setInputError(validation.error || 'درجة غير صالحة');
@@ -511,7 +549,10 @@ export const GradeTable: React.FC<GradeTableProps> = ({
     fieldArabic: string,
     isPrimaryForStage: boolean
   ) => {
-    const gradeRecord = Object.values(grades).find((g) => g.studentId === student.id);
+    const key = (academicYearId && classId && sectionId && subjectId)
+      ? buildGradeKey(academicYearId, classId, sectionId, subjectId, student.id)
+      : undefined;
+    const gradeRecord = (key && grades[key]) ? grades[key] : currentSubjectGradesByStudentId[student.id];
     const score = gradeRecord ? gradeRecord[field] : null;
     const isEditing = activeCell?.studentIndex === studentIndex && activeCell?.field === field;
     const isSaved = savedCellFlash?.studentId === student.id && savedCellFlash?.field === field;

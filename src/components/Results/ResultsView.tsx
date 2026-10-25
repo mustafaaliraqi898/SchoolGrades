@@ -175,6 +175,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
       let hasIncomplete = false;
 
       const subjectScores: Record<string, number | null> = {};
+      const subjectRawScores: Record<string, number | null> = {};
+      const subjectAssistance: Record<string, number> = {};
 
       const studentGradesBySubject: Record<string, GradeRecord | undefined> = {};
       classSubjects.forEach((sub) => {
@@ -198,19 +200,45 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
       classSubjects.forEach((sub) => {
         const record = studentGradesBySubject[sub.id];
+        const subEval = evaluation.subjects[sub.id];
 
         // Read specific score field requested
         let score: number | null = null;
+        let rawScore: number | null = null;
+        let assistanceApplied: number = 0;
+
         if (selectedGradeType === 'finalScore') {
-          const subEval = evaluation.subjects[sub.id];
           score = subEval ? subEval.effectiveFinalScore : (record?.finalScore ?? null);
+          rawScore = subEval ? subEval.rawFinalScore : (record?.finalScore ?? null);
+          assistanceApplied = subEval ? subEval.primaryAssistanceApplied : 0;
         } else if (selectedGradeType === 'secondRoundFinalScore') {
-          score = record?.secondRoundFinalScore ?? null;
+          if (subEval?.isMakeUpEligible && subEval.secondRoundScore !== null && subEval.secondRoundScore !== undefined) {
+            // الطالب أدى الدور الثاني في هذه المادة:
+            // الدرجة بعد احتساب المساعدة الإضافية (إن وجدت)
+            score = subEval.finalScoreAfterSecondRoundAssistance ?? subEval.effectiveFinalScore ?? subEval.secondRoundFinalScore ?? record?.secondRoundFinalScore ?? null;
+            // الدرجة الخام المحسوبة من (السعي + الإكمال) ÷ 2 قبل المساعدة الإضافية
+            rawScore = subEval.secondRoundFinalScore ?? record?.secondRoundFinalScore ?? null;
+            assistanceApplied = subEval.secondRoundAssistanceApplied || 0;
+          } else if (subEval) {
+            // المادة لم يشملها الدور الثاني (ناجح فيها من الدور الأول أو معفى)
+            // الدرجة المعتمدة النهائية بعد انتهاء الدورين
+            score = subEval.effectiveFinalScore;
+            rawScore = subEval.rawFinalScore;
+            assistanceApplied = subEval.primaryAssistanceApplied || 0;
+          } else {
+            score = record?.secondRoundFinalScore ?? record?.finalScore ?? null;
+            rawScore = record?.secondRoundFinalScore ?? record?.finalScore ?? null;
+            assistanceApplied = 0;
+          }
         } else {
           score = record ? record[selectedGradeType] : null;
+          rawScore = score;
+          assistanceApplied = 0;
         }
 
         subjectScores[sub.id] = score;
+        subjectRawScores[sub.id] = rawScore;
+        subjectAssistance[sub.id] = assistanceApplied;
 
         if (score !== null && score !== undefined && !isNaN(score)) {
           totalScore += score;
@@ -248,6 +276,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
         status,
         notes,
         subjectScores,
+        subjectRawScores,
+        subjectAssistance,
       };
     });
   }, [
@@ -501,14 +531,25 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                   </td>
                   {classSubjects.map((sub) => {
                     const score = r.subjectScores[sub.id];
+                    const rawScore = r.subjectRawScores?.[sub.id];
+                    const assistance = r.subjectAssistance?.[sub.id] || 0;
                     const isNull = score === null || score === undefined || isNaN(score);
                     const isPass = !isNull && score >= sub.passScore;
                     const subEval = r.evaluation.subjects[sub.id];
                     const isIndivExempt = !!subEval?.isIndividualExempt;
 
+                    const title = isNull
+                      ? '—'
+                      : assistance > 0
+                      ? `الدرجة بعد المساعدة: ${score} (الدرجة قبل المساعدة: ${rawScore} | مساعدة: +${assistance})`
+                      : rawScore !== null && rawScore !== score
+                      ? `الدرجة: ${score} (الخام: ${rawScore})`
+                      : `الدرجة: ${score}`;
+
                     return (
                       <td
                         key={sub.id}
+                        title={title}
                         style={isIndivExempt ? { backgroundColor: '#eff6ff' } : undefined}
                         className={`border border-black p-1 text-center font-mono text-xs ${
                           isIndivExempt
@@ -520,7 +561,14 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                             : 'font-black text-rose-700 bg-rose-50/90'
                         }`}
                       >
-                        {isNull ? '—' : score}
+                        <div className="flex flex-col items-center justify-center leading-tight">
+                          <span>{isNull ? '—' : score}</span>
+                          {assistance > 0 && (
+                            <span className="text-[8px] text-emerald-800 font-sans font-bold">
+                              (+{assistance})
+                            </span>
+                          )}
+                        </div>
                       </td>
                     );
                   })}
@@ -915,14 +963,25 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                     {/* Subject Scores for selected grade type */}
                     {classSubjects.map((sub) => {
                       const score = r.subjectScores[sub.id];
+                      const rawScore = r.subjectRawScores?.[sub.id];
+                      const assistance = r.subjectAssistance?.[sub.id] || 0;
                       const isNull = score === null || score === undefined || isNaN(score);
                       const isPass = !isNull && score >= sub.passScore;
                       const subEval = r.evaluation.subjects[sub.id];
                       const isIndivExempt = !!subEval?.isIndividualExempt;
 
+                      const tooltip = isNull
+                        ? 'درجة غير مسجلة'
+                        : assistance > 0
+                        ? `الدرجة بعد المساعدة الوزارية: ${score} (الدرجة الخام قبل المساعدة: ${rawScore} | مقدار المساعدة: +${assistance})`
+                        : rawScore !== null && rawScore !== score
+                        ? `الدرجة: ${score} (الخام: ${rawScore})`
+                        : `الدرجة: ${score}`;
+
                       return (
                         <td
                           key={sub.id}
+                          title={tooltip}
                           className={`p-2.5 text-center font-mono text-sm border-l border-slate-800 ${
                             isIndivExempt
                               ? 'bg-blue-950/30 text-blue-300 font-bold border-blue-900/40'
@@ -933,8 +992,16 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                               : 'text-red-400 font-bold bg-red-950/30'
                           }`}
                         >
-                          <div className="flex items-center justify-center gap-1">
+                          <div className="flex items-center justify-center gap-1.5">
                             <span>{isNull ? '—' : score}</span>
+                            {assistance > 0 && (
+                              <span
+                                className="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-sans font-bold border border-emerald-500/30"
+                                title={`تمت إضافة ${assistance} درجات مساعدة وزارية`}
+                              >
+                                +{assistance}م
+                              </span>
+                            )}
                             {isIndivExempt && (
                               <span className="text-[9px] px-1 py-0.2 rounded bg-blue-500/20 text-blue-300 font-sans border border-blue-500/30">
                                 معفى

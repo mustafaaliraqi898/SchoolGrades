@@ -550,10 +550,12 @@ export function evaluateStudentAcademicYearDecisions(
         if (mkFinal !== null && mkFinal >= subEval.subject.passScore) {
           // نجح الطالب في الدور الثاني دون الحاجة إلى مساعدة
           subEval.passedFinal = true;
+          subEval.finalScoreAfterSecondRoundAssistance = mkFinal;
           subEval.effectiveFinalScore = mkFinal;
         } else {
           // راسب مؤقتاً في الدور الثاني بانتظار تطبيق المساعدة المتبقية والإضافية
           subEval.passedFinal = false;
+          subEval.finalScoreAfterSecondRoundAssistance = mkFinal;
           subEval.effectiveFinalScore = mkFinal;
         }
       }
